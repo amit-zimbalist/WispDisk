@@ -1,0 +1,50 @@
+[Version]
+Signature="$WINDOWS NT$"
+Class=SCSIAdapter
+ClassGuid={4D36E97B-E325-11CE-BFC1-08002BE10318}
+Provider=%ProviderName%
+CatalogFile=WispDisk.cat
+DriverVer=09/05/2026,0.2.0.0
+PnpLockdown=1
+
+[DestinationDirs]
+WispDisk.CopyFiles=13
+
+[SourceDisksNames]
+1=%InstallDisk%,,,
+
+[SourceDisksFiles]
+WispDisk.sys=1
+
+[Manufacturer]
+%ProviderName%=WispDisk.Models,NTamd64.10.0...16299
+
+[WispDisk.Models.NTamd64.10.0...16299]
+%WispDisk.DeviceDesc%=WispDisk.Install,ROOT\WISPDISK
+
+[WispDisk.Install.NT]
+CopyFiles=WispDisk.CopyFiles
+
+[WispDisk.CopyFiles]
+WispDisk.sys
+
+[WispDisk.Install.NT.Services]
+AddService=WispDiskVmp,0x00000002,WispDisk.Service
+
+[WispDisk.Service]
+DisplayName=%WispDisk.ServiceDesc%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%13%\WispDisk.sys
+LoadOrderGroup=SCSI Miniport
+AddReg=WispDisk.Service.AddReg
+
+[WispDisk.Service.AddReg]
+HKR,"Parameters\PnpInterface","5",0x00010001,0x00000001
+
+[Strings]
+ProviderName="WispDisk Project"
+InstallDisk="WispDisk virtual storage miniport installation media"
+WispDisk.DeviceDesc="WispDisk Virtual Storage Adapter"
+WispDisk.ServiceDesc="WispDisk Virtual Storage Miniport"

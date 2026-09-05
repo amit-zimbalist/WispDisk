@@ -1,0 +1,12 @@
+/target/
+/artifacts/
+/.vs/
+*.VC.db
+*.VC.opendb
+*.user
+*.suo
+*.pfx
+*.cer
+*.etl
+*.dmp
+

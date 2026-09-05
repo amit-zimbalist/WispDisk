@@ -1,0 +1,26 @@
+[package]
+name = "wispdisk-cli"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.85"
+build = "build.rs"
+
+[[bin]]
+name = "wispdisk"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+
+[target.'cfg(windows)'.dependencies]
+serde = { workspace = true }
+wmi = { workspace = true }
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_Storage_IscsiDisc",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+] }

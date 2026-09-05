@@ -1,0 +1,7 @@
+[workspace]
+members = ["cli"]
+resolver = "2"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+wmi = "0.18"

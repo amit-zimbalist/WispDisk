@@ -15,9 +15,18 @@
     <ClCompile Include="src\driver.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\management.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\scsi.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\driver.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\driver_internal.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\wispdisk_protocol.h">
@@ -30,4 +39,3 @@
     </Inf>
   </ItemGroup>
 </Project>
-

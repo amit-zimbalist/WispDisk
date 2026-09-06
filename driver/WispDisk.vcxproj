@@ -81,9 +81,12 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\driver.cpp" />
+    <ClCompile Include="src\management.cpp" />
+    <ClCompile Include="src\scsi.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\driver.h" />
+    <ClInclude Include="src\driver_internal.h" />
     <ClInclude Include="..\shared\wispdisk_protocol.h" />
   </ItemGroup>
   <ItemGroup>

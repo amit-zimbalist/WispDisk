@@ -17,9 +17,12 @@ WispDisk.CopyFiles=13
 WispDisk.sys=1
 
 [Manufacturer]
-%ProviderName%=WispDisk.Models,NTamd64.10.0...16299
+%ProviderName%=WispDisk.Models,NTamd64.10.0...16299,NTarm64.10.0...16299
 
 [WispDisk.Models.NTamd64.10.0...16299]
+%WispDisk.DeviceDesc%=WispDisk.Install,ROOT\WISPDISK
+
+[WispDisk.Models.NTarm64.10.0...16299]
 %WispDisk.DeviceDesc%=WispDisk.Install,ROOT\WISPDISK
 
 [WispDisk.Install.NT]

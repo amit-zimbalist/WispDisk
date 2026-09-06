@@ -3,7 +3,7 @@ param(
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Debug',
 
-    [ValidateSet('x64')]
+    [ValidateSet('x64', 'ARM64')]
     [string]$Platform = 'x64',
 
     [switch]$SkipDriver
@@ -14,6 +14,15 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $driverSolution = Join-Path $repoRoot 'driver\WispDisk.sln'
 $artifactRoot = Join-Path $repoRoot 'artifacts'
 $packageDirectory = Join-Path $artifactRoot "package\$Configuration\$Platform"
+$rustTarget = if ($Platform -eq 'ARM64') { 'aarch64-pc-windows-msvc' } else { $null }
+
+if ($rustTarget) {
+    $installedRustTargets = @(& rustup target list --installed)
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to query installed Rust targets.' }
+    if ($installedRustTargets -notcontains $rustTarget) {
+        throw "Rust target $rustTarget is not installed. Run: rustup target add $rustTarget"
+    }
+}
 
 if (-not $SkipDriver) {
     $vswhere = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe'
@@ -32,7 +41,12 @@ if (-not $SkipDriver) {
     }
 
     if ($env:Driver_SpectreMitigation -ne 'false') {
-        $spectreVisualStudio = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre -property installationPath
+        $spectreComponent = if ($Platform -eq 'ARM64') {
+            'Microsoft.VisualStudio.Component.VC.Runtimes.ARM64.Spectre'
+        } else {
+            'Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre'
+        }
+        $spectreVisualStudio = & $vswhere -latest -products * -requires $spectreComponent -property installationPath
         if (-not $spectreVisualStudio) {
             $toolsetVersionFile = Join-Path $driverVisualStudio 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt'
             if (-not (Test-Path -LiteralPath $toolsetVersionFile -PathType Leaf)) {
@@ -42,7 +56,7 @@ if (-not $SkipDriver) {
             $spectreLibraryDirectory = Join-Path $driverVisualStudio "VC\Tools\MSVC\$toolsetVersion\lib\spectre\$Platform"
             $spectreLibraries = @(Get-ChildItem -LiteralPath $spectreLibraryDirectory -Filter '*.lib' -File -ErrorAction SilentlyContinue)
             if ($spectreLibraries.Count -eq 0) {
-                throw 'Visual Studio is missing Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre, which the WDK requires for mitigated x64 driver builds.'
+                throw "Visual Studio is missing $spectreComponent, which the WDK requires for mitigated $Platform driver builds."
             }
         }
     }
@@ -78,6 +92,9 @@ try {
     $cargoArguments = @('build', '--workspace')
     if ($Configuration -eq 'Release') {
         $cargoArguments += '--release'
+    }
+    if ($rustTarget) {
+        $cargoArguments += @('--target', $rustTarget)
     }
     & cargo @cargoArguments
     if ($LASTEXITCODE -ne 0) { throw 'Rust build failed' }

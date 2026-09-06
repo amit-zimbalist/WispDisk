@@ -3,7 +3,7 @@ param(
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Debug',
 
-    [ValidateSet('x64')]
+    [ValidateSet('x64', 'ARM64')]
     [string]$Platform = 'x64'
 )
 
@@ -14,6 +14,15 @@ $signingDirectory = Join-Path $repoRoot 'artifacts\signing'
 $manifestPath = Join-Path $signingDirectory "$Configuration-$Platform-manifest.json"
 $certificatePath = Join-Path $signingDirectory 'WispDiskTest.cer'
 $subject = 'CN=WispDisk Driver Test Certificate'
+$rustTarget = if ($Platform -eq 'ARM64') { 'aarch64-pc-windows-msvc' } else { $null }
+
+if ($rustTarget) {
+    $installedRustTargets = @(& rustup target list --installed)
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to query installed Rust targets.' }
+    if ($installedRustTargets -notcontains $rustTarget) {
+        throw "Rust target $rustTarget is not installed. Run: rustup target add $rustTarget"
+    }
+}
 
 New-Item -ItemType Directory -Path $signingDirectory -Force | Out-Null
 
@@ -75,11 +84,12 @@ if (-not $inf2cat -or -not (Test-Path -LiteralPath $inf2cat -PathType Leaf)) {
 $sysPath = Join-Path $packageDirectory 'WispDisk.sys'
 $infPath = Join-Path $packageDirectory 'WispDisk.inf'
 $catPath = Join-Path $packageDirectory 'WispDisk.cat'
+$inf2CatOs = if ($Platform -eq 'ARM64') { '10_RS3_ARM64' } else { '10_X64' }
 
 & $signtool sign /v /fd SHA256 /s My /sha1 $certificate.Thumbprint $sysPath
 if ($LASTEXITCODE -ne 0) { throw 'Embedded SYS signing failed.' }
 
-& $inf2cat "/driver:$packageDirectory" /os:10_X64 /uselocaltime
+& $inf2cat "/driver:$packageDirectory" "/os:$inf2CatOs" /uselocaltime
 if ($LASTEXITCODE -ne 0) { throw 'Catalog regeneration failed after SYS signing.' }
 
 & $signtool sign /v /fd SHA256 /s My /sha1 $certificate.Thumbprint $catPath
@@ -103,6 +113,9 @@ try {
         if ($Configuration -eq 'Release') {
             $cargoArguments += '--release'
         }
+        if ($rustTarget) {
+            $cargoArguments += @('--target', $rustTarget)
+        }
         & cargo @cargoArguments
         if ($LASTEXITCODE -ne 0) { throw 'Rust rebuild with signed embedded package failed.' }
     } finally {
@@ -113,7 +126,12 @@ try {
 }
 
 $profile = if ($Configuration -eq 'Release') { 'release' } else { 'debug' }
-$cliPath = Join-Path $repoRoot "target\$profile\wispdisk.exe"
+$cliDirectory = if ($rustTarget) {
+    Join-Path $repoRoot "target\$rustTarget\$profile"
+} else {
+    Join-Path $repoRoot "target\$profile"
+}
+$cliPath = Join-Path $cliDirectory 'wispdisk.exe'
 $pdbPath = Join-Path $repoRoot "artifacts\driver\$Configuration\$Platform\WispDisk.pdb"
 $manifestFiles = @($sysPath, $infPath, $catPath, $pdbPath, $cliPath, $certificatePath)
 foreach ($path in $manifestFiles) {

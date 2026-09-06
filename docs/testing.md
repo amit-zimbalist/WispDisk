@@ -21,6 +21,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 msbuild driver\WispDisk.sln /m /p:Configuration=Debug /p:Platform=x64 /p:RunCodeAnalysis=true
+msbuild driver\WispDisk.sln /m /p:Configuration=Debug /p:Platform=ARM64 /p:RunCodeAnalysis=true
 InfVerif.exe /w driver\WispDisk.inf
 ```
 

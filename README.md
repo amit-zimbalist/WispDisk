@@ -81,11 +81,15 @@ scripts/test-cli.ps1       Safe user-mode tests and smoke checks
 ## Prerequisites
 
 - Rust 1.85 or newer.
+- Native ARM64 CLI builds require the Rust target installed with
+  `rustup target add aarch64-pc-windows-msvc`.
 - Visual Studio 2022 with Desktop development with C++.
 - A Windows 11 WDK compatible with the installed Visual Studio/SDK. For a
   VS 2022 environment, WDK 10.0.26100.x is the appropriate supported line.
 - MSVC v143 Spectre-mitigated libraries for x86/x64
-  (`Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre`).
+  (`Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre`). ARM64
+  builds also require the ARM64/ARM64EC Spectre-mitigated libraries
+  (`Microsoft.VisualStudio.Component.VC.Runtimes.ARM64.Spectre`).
 - A disposable Hyper-V Windows 10/11 VM for every load and verifier run.
 
 The standard solution build requires both the WDK files under Windows Kits and
@@ -111,7 +115,12 @@ Full package build after installing the WDK and its Visual Studio component:
 
 ```powershell
 .\scripts\build.ps1 -Configuration Debug
+.\scripts\build.ps1 -Configuration Debug -Platform ARM64
 ```
+
+The ARM64 build writes the native CLI to
+`target\aarch64-pc-windows-msvc\debug\wispdisk.exe` and embeds the ARM64 driver
+package in that executable.
 
 The full build compiles the driver with Driver Code Analysis, requires
 `WispDisk.sys`, `WispDisk.inf`, and `WispDisk.cat` from the selected configuration,
@@ -124,10 +133,10 @@ packages must use the default Spectre-mitigated build.
 
 ## Signing and testing
 
-Test signing is optional as a project configuration, but a modern x64 Windows
-guest still needs a signature policy that permits the particular development
-driver. Do not change boot policy on a development workstation. Follow the VM
-workflow in [docs/testing.md](docs/testing.md).
+Test signing is optional as a project configuration, but a modern x64 or ARM64
+Windows guest still needs a signature policy that permits the particular
+development driver. Do not change boot policy on a development workstation.
+Follow the VM workflow in [docs/testing.md](docs/testing.md).
 
 Driver Verifier is a test gate, not a one-time checkbox. It can intentionally
 crash Windows when it finds a violation, so Microsoft recommends running it

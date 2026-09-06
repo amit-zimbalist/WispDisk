@@ -9,4 +9,8 @@
 *.cer
 *.etl
 *.dmp
-
+driver/.vs/
+*.pdb
+test-results/
+skills/
+artifafcts/

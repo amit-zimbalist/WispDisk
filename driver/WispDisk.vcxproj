@@ -69,6 +69,9 @@
   <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'" Label="PropertySheets">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(ProjectDir)WispDisk.Common.props" />
+  </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup>
     <OutDir>$(ProjectDir)..\artifacts\driver\$(Configuration)\$(Platform)\</OutDir>
@@ -81,68 +84,47 @@
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <WarningLevel>Level4</WarningLevel>
-      <TreatWarningAsError>true</TreatWarningAsError>
-      <ExceptionHandling>false</ExceptionHandling>
-      <RuntimeTypeInfo>false</RuntimeTypeInfo>
-      <LanguageStandard>stdcpp20</LanguageStandard>
       <PreprocessorDefinitions>DBG=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
-    <Link>
-      <AdditionalDependencies>storport.lib;%(AdditionalDependencies)</AdditionalDependencies>
-    </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <WarningLevel>Level4</WarningLevel>
-      <TreatWarningAsError>true</TreatWarningAsError>
-      <ExceptionHandling>false</ExceptionHandling>
-      <RuntimeTypeInfo>false</RuntimeTypeInfo>
-      <LanguageStandard>stdcpp20</LanguageStandard>
       <PreprocessorDefinitions>DBG=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
-    <Link>
-      <AdditionalDependencies>storport.lib;%(AdditionalDependencies)</AdditionalDependencies>
-    </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <WarningLevel>Level4</WarningLevel>
-      <TreatWarningAsError>true</TreatWarningAsError>
-      <ExceptionHandling>false</ExceptionHandling>
-      <RuntimeTypeInfo>false</RuntimeTypeInfo>
-      <LanguageStandard>stdcpp20</LanguageStandard>
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
     </ClCompile>
-    <Link>
-      <AdditionalDependencies>storport.lib;%(AdditionalDependencies)</AdditionalDependencies>
-    </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <WarningLevel>Level4</WarningLevel>
-      <TreatWarningAsError>true</TreatWarningAsError>
-      <ExceptionHandling>false</ExceptionHandling>
-      <RuntimeTypeInfo>false</RuntimeTypeInfo>
-      <LanguageStandard>stdcpp20</LanguageStandard>
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
     </ClCompile>
-    <Link>
-      <AdditionalDependencies>storport.lib;%(AdditionalDependencies)</AdditionalDependencies>
-    </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\driver.cpp" />
-    <ClCompile Include="src\management.cpp" />
-    <ClCompile Include="src\scsi.cpp" />
+    <ClCompile Include="src\management\control_request.cpp" />
+    <ClCompile Include="src\management\disk_operations.cpp" />
+    <ClCompile Include="src\management\management.cpp" />
+    <ClCompile Include="src\scsi\read_write.cpp" />
+    <ClCompile Include="src\scsi\scsi.cpp" />
+    <ClCompile Include="src\scsi\scsi_commands.cpp" />
+    <ClCompile Include="src\scsi\scsi_response.cpp" />
+    <ClCompile Include="src\support\scoped_spin_lock.cpp" />
+    <ClCompile Include="src\support\stor_port_pool_allocation.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\driver.h" />
-    <ClInclude Include="src\driver_internal.h" />
+    <ClInclude Include="src\management\control_request.h" />
+    <ClInclude Include="src\management\disk_operations.h" />
+    <ClInclude Include="src\management\management.h" />
+    <ClInclude Include="src\scsi\read_write.h" />
+    <ClInclude Include="src\scsi\scsi.h" />
+    <ClInclude Include="src\scsi\scsi_commands.h" />
+    <ClInclude Include="src\scsi\scsi_response.h" />
+    <ClInclude Include="src\support\scoped_spin_lock.h" />
+    <ClInclude Include="src\support\stor_port_pool_allocation.h" />
     <ClInclude Include="..\shared\wispdisk_protocol.h" />
   </ItemGroup>
   <ItemGroup>
@@ -151,6 +133,9 @@
       <SpecifyDriverVerDirectiveVersion>false</SpecifyDriverVerDirectiveVersion>
     </Inf>
     <FilesToPackage Include="$(TargetPath)" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="WispDisk.Common.props" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

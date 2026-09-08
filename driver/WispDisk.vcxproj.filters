@@ -10,24 +10,90 @@
     <Filter Include="Driver Package">
       <UniqueIdentifier>{4C7B3042-09BC-454E-AB99-C6C3032EB4C8}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\Management">
+      <UniqueIdentifier>{0FA466C7-808B-43FB-A775-B45A8A0D4BAA}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\SCSI">
+      <UniqueIdentifier>{95569B50-6E03-4846-8D49-DB7C2247E30D}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Support">
+      <UniqueIdentifier>{2F8BC9E3-343E-42E8-AC57-A37B4E64A199}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Management">
+      <UniqueIdentifier>{58E53C4A-0EA9-4979-9ED2-77977B95CC8E}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\SCSI">
+      <UniqueIdentifier>{D1333D35-49E7-4675-8862-72B0D69BC647}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Support">
+      <UniqueIdentifier>{D06BDA6A-7192-4359-84A5-7B9CB6D45594}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Property Sheets">
+      <UniqueIdentifier>{81B8E894-5E1F-4FD8-B955-4CD3B11AA7E9}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\driver.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="src\management.cpp">
-      <Filter>Source Files</Filter>
+    <ClCompile Include="src\management\control_request.cpp">
+      <Filter>Source Files\Management</Filter>
     </ClCompile>
-    <ClCompile Include="src\scsi.cpp">
-      <Filter>Source Files</Filter>
+    <ClCompile Include="src\management\disk_operations.cpp">
+      <Filter>Source Files\Management</Filter>
+    </ClCompile>
+    <ClCompile Include="src\management\management.cpp">
+      <Filter>Source Files\Management</Filter>
+    </ClCompile>
+    <ClCompile Include="src\scsi\read_write.cpp">
+      <Filter>Source Files\SCSI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\scsi\scsi.cpp">
+      <Filter>Source Files\SCSI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\scsi\scsi_commands.cpp">
+      <Filter>Source Files\SCSI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\scsi\scsi_response.cpp">
+      <Filter>Source Files\SCSI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\support\scoped_spin_lock.cpp">
+      <Filter>Source Files\Support</Filter>
+    </ClCompile>
+    <ClCompile Include="src\support\stor_port_pool_allocation.cpp">
+      <Filter>Source Files\Support</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\driver.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="src\driver_internal.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="src\management\control_request.h">
+      <Filter>Header Files\Management</Filter>
+    </ClInclude>
+    <ClInclude Include="src\management\disk_operations.h">
+      <Filter>Header Files\Management</Filter>
+    </ClInclude>
+    <ClInclude Include="src\management\management.h">
+      <Filter>Header Files\Management</Filter>
+    </ClInclude>
+    <ClInclude Include="src\scsi\read_write.h">
+      <Filter>Header Files\SCSI</Filter>
+    </ClInclude>
+    <ClInclude Include="src\scsi\scsi.h">
+      <Filter>Header Files\SCSI</Filter>
+    </ClInclude>
+    <ClInclude Include="src\scsi\scsi_commands.h">
+      <Filter>Header Files\SCSI</Filter>
+    </ClInclude>
+    <ClInclude Include="src\scsi\scsi_response.h">
+      <Filter>Header Files\SCSI</Filter>
+    </ClInclude>
+    <ClInclude Include="src\support\scoped_spin_lock.h">
+      <Filter>Header Files\Support</Filter>
+    </ClInclude>
+    <ClInclude Include="src\support\stor_port_pool_allocation.h">
+      <Filter>Header Files\Support</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\wispdisk_protocol.h">
       <Filter>Header Files</Filter>
@@ -37,5 +103,10 @@
     <Inf Include="WispDisk.inf">
       <Filter>Driver Package</Filter>
     </Inf>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="WispDisk.Common.props">
+      <Filter>Property Sheets</Filter>
+    </None>
   </ItemGroup>
 </Project>

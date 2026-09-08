@@ -3,6 +3,8 @@ use std::{env, fs, path::PathBuf};
 const PACKAGE_FILES: [&str; 3] = ["WispDisk.sys", "WispDisk.inf", "WispDisk.cat"];
 
 fn main() {
+    embed_windows_resources();
+
     println!("cargo:rerun-if-env-changed=WISPDISK_DRIVER_PACKAGE_DIR");
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo always defines OUT_DIR"));
@@ -49,4 +51,26 @@ fn main() {
         "cargo:rustc-env=WISPDISK_PACKAGE_EMBEDDED={}",
         u8::from(package_dir.is_some())
     );
+}
+
+fn embed_windows_resources() {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+
+    let icon_path = PathBuf::from(
+        env::var_os("CARGO_MANIFEST_DIR").expect("Cargo always defines CARGO_MANIFEST_DIR"),
+    )
+    .join("../resources/logo.ico");
+    let icon_path = icon_path.to_string_lossy();
+
+    println!("cargo:rerun-if-changed={icon_path}");
+
+    winresource::WindowsResource::new()
+        .set_icon(&icon_path)
+        .set("ProductName", "WispDisk")
+        .set("FileDescription", "WispDisk volatile virtual disk utility")
+        .set("OriginalFilename", "wispdisk.exe")
+        .compile()
+        .unwrap_or_else(|error| panic!("failed to embed Windows resources: {error}"));
 }

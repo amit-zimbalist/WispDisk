@@ -1,5 +1,9 @@
 # WispDisk for Windows
 
+<p align="center">
+  <img src="resources/logo.jpeg" alt="WispDisk logo" width="420">
+</p>
+
 This repository contains a VM-testable alpha of a Windows 10+ volatile virtual
 disk utility:
 
@@ -125,7 +129,8 @@ cargo make build-debug
 `cargo make build` is the default and produces both release architectures. The
 final executables are `artifacts\bin\Release\x64\wispdisk.exe` and
 `artifacts\bin\Release\ARM64\wispdisk.exe`. Each contains its matching signed
-`.sys`, `.inf`, and signed `.cat` package.
+`.sys`, `.inf`, and signed `.cat` package. The executable also embeds the
+WispDisk application icon used by Windows Explorer.
 
 The full build compiles the driver with Driver Code Analysis, test-signs the
 `.sys`, regenerates and signs the catalog, verifies both signatures and catalog

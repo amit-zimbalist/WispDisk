@@ -1,0 +1,99 @@
+[config]
+default_to_workspace = false
+skip_core_tasks = true
+
+[tasks.default]
+alias = "build"
+
+[tasks.build]
+description = "Build, test-sign, embed, sign, and verify x64 and ARM64 release artifacts"
+dependencies = ["build-x64", "build-arm64"]
+
+[tasks.build-x64]
+description = "Build and sign the x64 release artifact"
+command = "cargo"
+args = [
+    "run",
+    "--quiet",
+    "--locked",
+    "--manifest-path",
+    "scripts/build-tool/Cargo.toml",
+    "--",
+    "build",
+    "--configuration",
+    "Release",
+    "--platform",
+    "x64",
+]
+
+[tasks.build-arm64]
+description = "Build and sign the ARM64 release artifact"
+command = "cargo"
+args = [
+    "run",
+    "--quiet",
+    "--locked",
+    "--manifest-path",
+    "scripts/build-tool/Cargo.toml",
+    "--",
+    "build",
+    "--configuration",
+    "Release",
+    "--platform",
+    "ARM64",
+]
+
+[tasks.build-debug]
+description = "Build, test-sign, embed, sign, and verify x64 and ARM64 debug artifacts"
+dependencies = ["build-debug-x64", "build-debug-arm64"]
+
+[tasks.build-debug-x64]
+description = "Build and sign the x64 debug artifact"
+command = "cargo"
+args = [
+    "run",
+    "--quiet",
+    "--locked",
+    "--manifest-path",
+    "scripts/build-tool/Cargo.toml",
+    "--",
+    "build",
+    "--configuration",
+    "Debug",
+    "--platform",
+    "x64",
+]
+
+[tasks.build-debug-arm64]
+description = "Build and sign the ARM64 debug artifact"
+command = "cargo"
+args = [
+    "run",
+    "--quiet",
+    "--locked",
+    "--manifest-path",
+    "scripts/build-tool/Cargo.toml",
+    "--",
+    "build",
+    "--configuration",
+    "Debug",
+    "--platform",
+    "ARM64",
+]
+
+[tasks.check]
+description = "Run user-mode tests and build-tool tests without loading the driver"
+dependencies = ["check-cli", "check-build-tool"]
+
+[tasks.check-cli]
+command = "cargo"
+args = ["test", "--workspace", "--locked"]
+
+[tasks.check-build-tool]
+command = "cargo"
+args = [
+    "test",
+    "--locked",
+    "--manifest-path",
+    "scripts/build-tool/Cargo.toml",
+]

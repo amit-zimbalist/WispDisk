@@ -74,15 +74,17 @@ driver/                    MSVC/WDK StorPort miniport project and INF
 shared/                    Versioned fixed-layout driver protocol
 docs/architecture.md       Intended storage and control flow
 docs/testing.md            VM, Driver Verifier, and soak-test gates
-scripts/build.ps1          Driver-first/package-embedding build
-scripts/test-cli.ps1       Safe user-mode tests and smoke checks
+Makefile.toml              cargo-make entry points for x64 and ARM64
+scripts/build-tool/        Rust implementation of build/sign/verify steps
 ```
 
 ## Prerequisites
 
 - Rust 1.85 or newer.
-- Native ARM64 CLI builds require the Rust target installed with
-  `rustup target add aarch64-pc-windows-msvc`.
+- `cargo-make` (`cargo install cargo-make`).
+- The explicit Rust MSVC targets must be installed for the architectures being
+  built: `rustup target add x86_64-pc-windows-msvc
+  aarch64-pc-windows-msvc`.
 - Visual Studio 2022 with Desktop development with C++.
 - A Windows 11 WDK compatible with the installed Visual Studio/SDK. For a
   VS 2022 environment, WDK 10.0.26100.x is the appropriate supported line.
@@ -98,45 +100,57 @@ the Visual Studio **Windows Driver Kit** component
 libraries, and command-line tools is not enough for the
 `WindowsKernelModeDriver10.0` MSBuild platform.
 
-Signing is disabled by default until a SHA-256 test certificate is configured.
-Inf2Cat still creates and validates the unsigned catalog. Never put a private
-test-signing key in the repository or embed it into the executable.
+The signed build creates a non-exportable SHA-256 test code-signing certificate
+in `Cert:\CurrentUser\My` when `artifacts\signing\WispDiskTest.cer` does not
+exist. Only the public certificate is written to the artifacts directory. Never
+put a private signing key in the repository or embed one into the executable.
 
 ## Build
 
-Safe CLI-only checks:
+Safe user-mode checks:
 
-```powershell
-.\scripts\test-cli.ps1
-.\scripts\build.ps1 -SkipDriver -Configuration Debug
+```console
+cargo make check
 ```
 
-Full package build after installing the WDK and its Visual Studio component:
+Signed release builds after installing the WDK and its Visual Studio component:
 
-```powershell
-.\scripts\build.ps1 -Configuration Debug
-.\scripts\build.ps1 -Configuration Debug -Platform ARM64
+```console
+cargo make build
+cargo make build-x64
+cargo make build-arm64
+cargo make build-debug
 ```
 
-The ARM64 build writes the native CLI to
-`target\aarch64-pc-windows-msvc\debug\wispdisk.exe` and embeds the ARM64 driver
-package in that executable.
+`cargo make build` is the default and produces both release architectures. The
+final executables are `artifacts\bin\Release\x64\wispdisk.exe` and
+`artifacts\bin\Release\ARM64\wispdisk.exe`. Each contains its matching signed
+`.sys`, `.inf`, and signed `.cat` package.
 
-The full build compiles the driver with Driver Code Analysis, requires
-`WispDisk.sys`, `WispDisk.inf`, and `WispDisk.cat` from the selected configuration,
-then embeds those exact bytes into the Rust executable. A certificate/private
-key is never embedded.
+The full build compiles the driver with Driver Code Analysis, test-signs the
+`.sys`, regenerates and signs the catalog, verifies both signatures and catalog
+membership, embeds those exact package bytes, signs the final executable, and
+verifies its signature and architecture. A SHA-256 manifest is emitted for each
+architecture under `artifacts\signing`.
 
-For emergency diagnostics, a local build can explicitly set
-`Driver_SpectreMitigation=false`. That is not a release setting; signed test
-packages must use the default Spectre-mitigated build.
+By default the final executable uses the same disposable test certificate as
+the driver. Set `WISPDISK_EXE_CERT_THUMBPRINT` to use a different code-signing
+certificate from `Cert:\CurrentUser\My`; set
+`WISPDISK_DRIVER_CERT_THUMBPRINT` to select an existing driver test certificate.
+Set `WISPDISK_TIMESTAMP_URL` to add an RFC 3161 timestamp. The build never reads
+or writes a PFX file.
+
+The generated certificate is added to the current user's Root and
+TrustedPublisher stores so SignTool can validate it. Set
+`WISPDISK_SKIP_CERTIFICATE_TRUST=true` only when trust is managed separately.
+The generated certificate is for disposable test systems and VMs only; it is
+not a production-trusted driver signature.
 
 ## Signing and testing
 
-Test signing is optional as a project configuration, but a modern x64 or ARM64
-Windows guest still needs a signature policy that permits the particular
-development driver. Do not change boot policy on a development workstation.
-Follow the VM workflow in [docs/testing.md](docs/testing.md).
+A modern x64 or ARM64 Windows guest still needs a signature policy that permits
+the test-signed development driver. Do not change boot policy on a development
+workstation. Follow the VM workflow in [docs/testing.md](docs/testing.md).
 
 Driver Verifier is a test gate, not a one-time checkbox. It can intentionally
 crash Windows when it finds a violation, so Microsoft recommends running it

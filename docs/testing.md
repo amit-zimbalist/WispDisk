@@ -16,12 +16,12 @@ it for this driver on the host workstation.
 
 ## Per-build static gates
 
-```powershell
+```console
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-msbuild driver\WispDisk.sln /m /p:Configuration=Debug /p:Platform=x64 /p:RunCodeAnalysis=true
-msbuild driver\WispDisk.sln /m /p:Configuration=Debug /p:Platform=ARM64 /p:RunCodeAnalysis=true
+cargo make build-debug-x64
+cargo make build-debug-arm64
 InfVerif.exe /w driver\WispDisk.inf
 ```
 

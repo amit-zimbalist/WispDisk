@@ -10,6 +10,7 @@ name = "wispdisk"
 path = "src/main.rs"
 
 [dependencies]
+anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 
 [build-dependencies]
@@ -26,4 +27,5 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_Storage_IscsiDisc",
     "Win32_System_IO",
     "Win32_System_Ioctl",
+    "Win32_System_Threading",
 ] }

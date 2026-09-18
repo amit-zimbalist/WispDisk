@@ -20,6 +20,45 @@ initialization, formatting, and drive-letter assignment. The miniport owns LUN
 lifetime and block I/O. Drive letters are mount-manager state and must not be
 treated as kernel disk identity.
 
+### Rust module boundaries
+
+`cli/src/driver.rs` is the platform-independent entry point. The Windows
+implementation lives in `cli/src/driver/windows/`:
+
+- `mod.rs`: add/delete orchestration and shared wait durations;
+- `adapter.rs`: lazy adapter discovery and validated miniport protocol calls;
+- `install.rs`: embedded package extraction and root-device installation;
+- `recovery.rs`: retains the primary error and a failed rollback/recovery error;
+- `disk.rs`: disk-interface discovery and SCSI identity checks;
+- `disk_interface_notification.rs`: arrival subscription, callback, and cleanup;
+- `storage.rs`: WMI disk/partition/volume models and provisioning;
+- `volume.rs`: drive-letter state, volume identity, locks, and mount rollback;
+- `win32.rs`: shared handle ownership, device opening, encoding, and errors.
+
+`cli/src/timing.rs` provides process-wide phase diagnostics. `main` initializes
+it immediately before command execution only when `/timings` is enabled.
+Callers use `timing::mark(...)` without passing a timer or an enable flag through
+the driver. When disabled, marks return without initializing the timer, reading
+the clock, or acquiring a lock. Poisoned locks and output failures are ignored
+because diagnostics must not interrupt an operation or its rollback. A single
+phase timeline assumes sequential commands; concurrent operations would need
+per-operation timers.
+
+Implementation helpers are private or restricted to their parent module. The
+notification module owns the event and unregisters its callback before closing
+the event handle. Adapter discovery has one lazy scan: creation stops at the
+first match, while deletion visits all adapters to verify unique ownership.
+
+`DriverPackage` owns the extracted INF path and its installation operations.
+`CreatedDevice` owns a newly created root-device handle and exposes explicit
+rollback removal; dropping it never removes a successfully installed device.
+
+CLI operations use `anyhow::Result` with context rather than stringifying
+underlying I/O and WMI errors. Platform preconditions retain typed `DriverError`
+variants, Win32 error codes remain inspectable, and the CLI prints the complete
+context chain. If recovery also fails, its error is retained alongside the
+primary failure rather than replacing or flattening it.
+
 ## Add flow
 
 1. Parse and validate `/add`, media kind, drive letter, and byte size without
@@ -36,17 +75,21 @@ treated as kernel disk identity.
    the protocol version/capability query before any mutation.
 7. Send a create request. The driver validates all fields, allocates a unique
    device ID, publishes a LUN, and notifies StorPort of the state change.
-8. Wait for `disk.sys` and match the returned path/target/LUN plus the adapter's
-   SCSI port through `IOCTL_SCSI_GET_ADDRESS`. Never trust enumeration order or
-   a `PhysicalDriveN` number on its own.
-9. Initialize the disk, create one partition, format it, and assign the
-   requested mount point. These are separate operations with separate rollback.
+8. Register for `GUID_DEVINTERFACE_DISK` arrival, enumerate the present disk
+   interfaces, and match the returned path/target/LUN plus the adapter's SCSI
+   port through `IOCTL_SCSI_GET_ADDRESS`. Resolve the matching interface to its
+   disk number with `IOCTL_STORAGE_GET_DEVICE_NUMBER`. Never trust enumeration
+   order or a `PhysicalDriveN` number on its own.
+9. Initialize the disk, create one partition with the requested drive letter,
+   format it, and verify the mount. These are separate operations with shared
+   rollback. Consume the partition object returned by the create operation
+   instead of waiting for a second provider-cache query.
 
 Immediately before formatting, revalidate the physical disk's SCSI address.
-PowerShell separately rejects a disk that is not RAW, has become boot/system,
-or no longer has the exact requested size. If a later add step fails, the CLI
-requests LUN deletion. Never delete or initialize a disk selected only by its
-current `PhysicalDriveN` number.
+The WMI provisioning layer rejects an unexpected partition style, boot/system
+disks, or a disk without the exact requested size. If a later add step fails,
+the CLI requests LUN deletion. Never delete or initialize a disk selected only
+by its current `PhysicalDriveN` number.
 
 ## Delete flow
 

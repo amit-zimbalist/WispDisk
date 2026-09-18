@@ -2,6 +2,7 @@ mod args;
 mod driver;
 mod payload;
 mod protocol;
+mod timing;
 
 use std::process::ExitCode;
 
@@ -11,6 +12,7 @@ use clap::Parser;
 fn main() -> ExitCode {
     let cli = Cli::parse_from(normalize_windows_args(std::env::args_os()));
     let dry_run = cli.dry_run;
+    let timings = cli.timings;
     let command = match cli.into_command() {
         Ok(command) => command,
         Err(error) => {
@@ -24,10 +26,11 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
+    timing::init(timings);
     match driver::execute(&command) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("error: {error:#}");
             ExitCode::FAILURE
         }
     }

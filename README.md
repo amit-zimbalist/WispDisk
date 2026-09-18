@@ -70,6 +70,14 @@ touching a driver:
 cargo run -p wispdisk-cli -- /add /rem /letter:R /size:64MiB /dry-run
 ```
 
+Use the hidden `/timings` switch in a disposable test VM to print elapsed time
+for adapter discovery, backing-store allocation/zeroing, PnP discovery, each
+storage-provisioning phase, NTFS formatting, and final identity verification:
+
+```powershell
+wispdisk.exe /add /hdd /letter R /size 128MiB /timings
+```
+
 ## Repository layout
 
 ```text

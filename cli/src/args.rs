@@ -43,6 +43,10 @@ pub struct Cli {
     /// Validate and print the request without touching the driver.
     #[arg(long, hide = true)]
     pub dry_run: bool,
+
+    /// Print elapsed time for each driver and storage-provisioning phase.
+    #[arg(long, hide = true)]
+    pub timings: bool,
 }
 
 impl Cli {
@@ -260,6 +264,7 @@ fn normalize_one(argument: OsString) -> OsString {
         "letter" => "letter",
         "size" => "size",
         "dry-run" => "dry-run",
+        "timings" => "timings",
         "help" | "?" => "help",
         "version" => "version",
         _ => return argument,
@@ -345,5 +350,18 @@ mod tests {
     fn leaves_unknown_slash_arguments_untouched() {
         let normalized = normalize_windows_args(["wispdisk.exe", "/not-an-option"]);
         assert_eq!(normalized[1], OsString::from("/not-an-option"));
+    }
+
+    #[test]
+    fn accepts_hidden_timings_switch() {
+        let parsed = parse(&[
+            "wispdisk.exe",
+            "/add",
+            "/hdd",
+            "/letter:R",
+            "/size:64MiB",
+            "/timings",
+        ]);
+        assert!(parsed.timings);
     }
 }

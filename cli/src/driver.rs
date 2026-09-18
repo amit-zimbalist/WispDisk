@@ -1,25 +1,26 @@
 use std::{error::Error, fmt};
 
+use anyhow::{Result, bail};
+
 use crate::{args::Command, payload};
 
 #[cfg(windows)]
-#[path = "driver_windows.rs"]
-mod imp;
+mod windows;
 
-pub fn execute(command: &Command) -> Result<(), DriverError> {
+pub fn execute(command: &Command) -> Result<()> {
     if !payload::package_is_embedded() {
-        return Err(DriverError::PackageNotEmbedded);
+        bail!(DriverError::PackageNotEmbedded);
     }
 
     #[cfg(windows)]
     {
-        imp::execute(command).map_err(DriverError::Operation)
+        windows::execute(command)
     }
 
     #[cfg(not(windows))]
     {
         let _ = command;
-        Err(DriverError::UnsupportedPlatform)
+        bail!(DriverError::UnsupportedPlatform)
     }
 }
 
@@ -28,7 +29,6 @@ pub enum DriverError {
     PackageNotEmbedded,
     #[cfg(not(windows))]
     UnsupportedPlatform,
-    Operation(String),
 }
 
 impl fmt::Display for DriverError {
@@ -41,9 +41,24 @@ impl fmt::Display for DriverError {
             Self::UnsupportedPlatform => {
                 formatter.write_str("wispdisk is only supported on Windows")
             }
-            Self::Operation(message) => formatter.write_str(message),
         }
     }
 }
 
 impl Error for DriverError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_preserves_typed_driver_errors_and_full_message() {
+        let error = anyhow::Error::new(DriverError::PackageNotEmbedded).context("create disk");
+        assert_eq!(
+            error.downcast_ref::<DriverError>(),
+            Some(&DriverError::PackageNotEmbedded)
+        );
+        let message = format!("{error:#}");
+        assert!(message.starts_with("create disk: no signed driver package is embedded"));
+    }
+}

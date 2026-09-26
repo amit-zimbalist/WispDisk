@@ -61,8 +61,8 @@ primary failure rather than replacing or flattening it.
 
 ## Add flow
 
-1. Parse and validate `/add`, media kind, drive letter, and byte size without
-   elevation.
+1. Parse and validate `/add`, media kind, drive letter, byte size, and selected
+   filesystem without elevation. NTFS is the default.
 2. Verify the requested letter is free.
 3. Require the process to be elevated for the privileged phase; Windows API
    errors retain their Win32 error codes when it is not.
@@ -80,10 +80,11 @@ primary failure rather than replacing or flattening it.
    port through `IOCTL_SCSI_GET_ADDRESS`. Resolve the matching interface to its
    disk number with `IOCTL_STORAGE_GET_DEVICE_NUMBER`. Never trust enumeration
    order or a `PhysicalDriveN` number on its own.
-9. Initialize the disk, create one partition with the requested drive letter,
-   format it, and verify the mount. These are separate operations with shared
-   rollback. Consume the partition object returned by the create operation
-   instead of waiting for a second provider-cache query.
+9. Initialize the disk, create one filesystem-appropriate MBR partition with
+   the requested drive letter, format it as FAT, FAT32, or NTFS, and verify the
+   mount. These are separate operations with shared rollback. Consume the
+   partition object returned by the create operation instead of waiting for a
+   second provider-cache query.
 
 Immediately before formatting, revalidate the physical disk's SCSI address.
 The WMI provisioning layer rejects an unexpected partition style, boot/system

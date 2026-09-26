@@ -17,9 +17,10 @@ The driver exposes one SCSI target with up to 16 dynamic LUNs. It implements the
 management protocol, bounded nonpaged RAM backing, the SCSI discovery/capacity/
 mode-sense commands needed by the disk stack, and READ/WRITE 6/10/12/16. The CLI
 installs a root-enumerated adapter, creates a LUN, safely identifies its exact
-SCSI address, creates one MBR partition, formats it as NTFS, and assigns the
-requested drive letter. Delete resolves the volume back to that SCSI address,
-locks and dismounts it, then removes the matching driver device ID.
+SCSI address, creates one MBR partition, formats it as FAT, FAT32, or NTFS, and
+assigns the requested drive letter. Delete resolves the volume back to that
+SCSI address, locks and dismounts it, then removes the matching driver device
+ID.
 
 This is still an **alpha kernel driver**. Build and static analysis are clean,
 but it must not be loaded on a workstation. Runtime validation belongs in a
@@ -49,7 +50,8 @@ The requested Windows slash syntax is accepted, as are normal `--long` options:
 
 ```powershell
 wispdisk.exe /add /hdd /letter R /size 128MiB
-wispdisk.exe /add /rem /letter:S /size:64MiB
+wispdisk.exe /add /rem /letter:S /size:64MiB /fs:FAT32
+wispdisk.exe /add /hdd /letter T /size 32MiB /fs FAT
 wispdisk.exe /del /letter R
 ```
 
@@ -60,6 +62,11 @@ Rules enforced now:
 - `/letter` is required;
 - `/size` is required only for `/add`, is from 16 MiB through 256 MiB, and is
   512-byte aligned;
+- `/fs` is valid only for `/add`, accepts `FAT`, `FAT32`, or `NTFS`
+  case-insensitively, and defaults to `NTFS`;
+- FAT32 disks must be at least 64 MiB; FAT and NTFS retain the 16 MiB minimum;
+- NTFS volumes use the label `WispDisk-XXXXXXXX`; FAT and FAT32 use the
+  11-character label `WD-XXXXXXXX`, where `XXXXXXXX` is the device ID;
 - size suffixes are `B`, `KB`, `KiB`, `MB`, `MiB`, `GB`, `GiB`, `TB`, and
   `TiB`.
 
@@ -72,7 +79,8 @@ cargo run -p wispdisk-cli -- /add /rem /letter:R /size:64MiB /dry-run
 
 Use the hidden `/timings` switch in a disposable test VM to print elapsed time
 for adapter discovery, backing-store allocation/zeroing, PnP discovery, each
-storage-provisioning phase, NTFS formatting, and final identity verification:
+storage-provisioning phase, filesystem formatting, and final identity
+verification:
 
 ```powershell
 wispdisk.exe /add /hdd /letter R /size 128MiB /timings

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use wmi::WMIConnection;
 
 use crate::{
-    args::{DriveLetter, MediaKind},
+    args::{DriveLetter, FileSystem, MediaKind},
     timing,
 };
 
@@ -20,6 +20,9 @@ use super::{
 
 const PARTITION_STYLE_RAW: u16 = 0;
 const PARTITION_STYLE_MBR: u16 = 1;
+const MBR_TYPE_FAT16: u16 = 4;
+const MBR_TYPE_IFS: u16 = 7;
+const MBR_TYPE_FAT32: u16 = 12;
 
 pub(super) fn initialize_and_format(
     disk_number: u32,
@@ -28,11 +31,12 @@ pub(super) fn initialize_and_format(
     expected_size: u64,
     device_id: u32,
     expected_location: ScsiLocation,
+    file_system: FileSystem,
 ) -> Result<()> {
     ensure_drive_letter_available(letter)?;
 
     let letter = char::from(letter.as_ascii()).to_ascii_uppercase();
-    let label = format!("WispDisk-{device_id:08X}");
+    let label = volume_label(file_system, device_id);
 
     let storage = StorageWmi::connect()?;
     timing::mark("connect to Storage WMI");
@@ -66,12 +70,12 @@ pub(super) fn initialize_and_format(
         PARTITION_STYLE_RAW => {
             storage.initialize_mbr(&disk)?;
             timing::mark("initialize MBR");
-            let partition = storage.create_max_partition(&disk, letter)?;
+            let partition = storage.create_max_partition(&disk, letter, file_system)?;
             timing::mark("create partition and assign drive letter");
             (partition, true)
         }
         PARTITION_STYLE_MBR if media == MediaKind::Removable => {
-            let prepared = storage.get_or_create_removable_partition(&disk, letter)?;
+            let prepared = storage.get_or_create_removable_partition(&disk, letter, file_system)?;
             timing::mark("prepare removable partition");
             prepared
         }
@@ -96,11 +100,14 @@ pub(super) fn initialize_and_format(
     verify_physical_disk_location(disk_number, expected_location)?;
     timing::mark("revalidate disk identity before format");
 
-    storage.format_ntfs(
-        &volume, &label, true, // quick
+    storage.format_volume(
+        &volume,
+        &label,
+        true, // quick
         true, // force
+        file_system,
     )?;
-    timing::mark("quick-format NTFS");
+    timing::mark(&format!("quick-format {file_system}"));
 
     Ok(())
 }
@@ -295,11 +302,16 @@ impl StorageWmi {
         )
     }
 
-    fn create_max_partition(&self, disk: &MSFT_Disk, letter: char) -> Result<MSFT_Partition> {
+    fn create_max_partition(
+        &self,
+        disk: &MSFT_Disk,
+        letter: char,
+        file_system: FileSystem,
+    ) -> Result<MSFT_Partition> {
         let input = CreatePartitionInput {
             use_maximum_size: true,
             drive_letter: letter.to_string(),
-            mbr_type: 7, // IFS (NTFS or exFAT) in the Storage WMI schema.
+            mbr_type: mbr_type(file_system),
         };
         let output: CreatePartitionOutput = self
             .connection
@@ -315,11 +327,12 @@ impl StorageWmi {
         &self,
         disk: &MSFT_Disk,
         letter: char,
+        file_system: FileSystem,
     ) -> Result<(MSFT_Partition, bool)> {
         let mut partitions = self.get_partitions(disk.number)?;
         match partitions.len() {
             0 => self
-                .create_max_partition(disk, letter)
+                .create_max_partition(disk, letter, file_system)
                 .map(|partition| (partition, true)),
             1 => {
                 let partition = partitions.remove(0);
@@ -415,25 +428,45 @@ impl StorageWmi {
         }
     }
 
-    fn format_ntfs(
+    fn format_volume(
         &self,
         volume: &MSFT_Volume,
         label: &str,
         quick: bool,
         force: bool,
+        file_system: FileSystem,
     ) -> Result<()> {
         let input = FormatVolumeInput {
-            file_system: "NTFS".into(),
+            file_system: wmi_file_system(file_system).into(),
             file_system_label: label.into(),
             full: !quick,
             force,
         };
-        self.exec_method::<MSFT_Volume>(
-            &volume.path,
-            "Format",
-            input,
-            "format the WispDisk volume as NTFS",
-        )
+        let operation = format!("format the WispDisk volume as {file_system}");
+        self.exec_method::<MSFT_Volume>(&volume.path, "Format", input, &operation)
+    }
+}
+
+fn wmi_file_system(file_system: FileSystem) -> &'static str {
+    match file_system {
+        FileSystem::Fat => "FAT",
+        FileSystem::Fat32 => "FAT32",
+        FileSystem::Ntfs => "NTFS",
+    }
+}
+
+fn mbr_type(file_system: FileSystem) -> u16 {
+    match file_system {
+        FileSystem::Fat => MBR_TYPE_FAT16,
+        FileSystem::Fat32 => MBR_TYPE_FAT32,
+        FileSystem::Ntfs => MBR_TYPE_IFS,
+    }
+}
+
+fn volume_label(file_system: FileSystem, device_id: u32) -> String {
+    match file_system {
+        FileSystem::Fat | FileSystem::Fat32 => format!("WD-{device_id:08X}"),
+        FileSystem::Ntfs => format!("WispDisk-{device_id:08X}"),
     }
 }
 
@@ -503,6 +536,24 @@ fn storage_status_name(status: u32) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn maps_file_systems_to_storage_values_and_labels() {
+        assert_eq!(wmi_file_system(FileSystem::Fat), "FAT");
+        assert_eq!(wmi_file_system(FileSystem::Fat32), "FAT32");
+        assert_eq!(wmi_file_system(FileSystem::Ntfs), "NTFS");
+
+        assert_eq!(mbr_type(FileSystem::Fat), MBR_TYPE_FAT16);
+        assert_eq!(mbr_type(FileSystem::Fat32), MBR_TYPE_FAT32);
+        assert_eq!(mbr_type(FileSystem::Ntfs), MBR_TYPE_IFS);
+
+        assert_eq!(volume_label(FileSystem::Fat, 0x1234ABCD), "WD-1234ABCD");
+        assert_eq!(volume_label(FileSystem::Fat32, 0x1234ABCD), "WD-1234ABCD");
+        assert_eq!(
+            volume_label(FileSystem::Ntfs, 0x1234ABCD),
+            "WispDisk-1234ABCD"
+        );
+    }
 
     #[test]
     fn parses_wmi_drive_letters() {

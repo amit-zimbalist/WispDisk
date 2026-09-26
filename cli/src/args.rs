@@ -3,6 +3,7 @@ use std::{ffi::OsString, fmt, str::FromStr};
 use clap::{ArgGroup, Parser};
 
 const MIN_DISK_SIZE: u64 = 16 * 1024 * 1024;
+const MIN_FAT32_DISK_SIZE: u64 = 64 * 1024 * 1024;
 const MAX_DISK_SIZE: u64 = 256 * 1024 * 1024;
 const LOGICAL_SECTOR_SIZE: u64 = 512;
 
@@ -11,7 +12,7 @@ const LOGICAL_SECTOR_SIZE: u64 = 512;
     name = "wispdisk",
     version,
     about = "Create and remove volatile virtual disks on Windows",
-    override_usage = "wispdisk.exe /add (/hdd|/rem) /letter <LETTER> /size <SIZE>\n       wispdisk.exe /del /letter <LETTER>",
+    override_usage = "wispdisk.exe /add (/hdd|/rem) /letter <LETTER> /size <SIZE> [/fs <FAT|FAT32|NTFS>]\n       wispdisk.exe /del /letter <LETTER>",
     group(ArgGroup::new("operation").required(true).multiple(false).args(["add", "delete"])),
     group(ArgGroup::new("media").multiple(false).args(["hdd", "removable"]))
 )]
@@ -40,6 +41,10 @@ pub struct Cli {
     #[arg(long, value_name = "SIZE")]
     size: Option<ByteSize>,
 
+    /// File system for the new volume: FAT, FAT32, or NTFS (default).
+    #[arg(long = "fs", value_name = "FAT|FAT32|NTFS")]
+    file_system: Option<FileSystem>,
+
     /// Validate and print the request without touching the driver.
     #[arg(long, hide = true)]
     pub dry_run: bool,
@@ -60,6 +65,10 @@ impl Cli {
                 _ => return Err(ValidationError::MissingMedia),
             };
             let size = self.size.ok_or(ValidationError::MissingSize)?;
+            let file_system = self.file_system.unwrap_or_default();
+            if file_system == FileSystem::Fat32 && size.0 < MIN_FAT32_DISK_SIZE {
+                return Err(ValidationError::Fat32SizeTooSmall);
+            }
             if size.0 < MIN_DISK_SIZE {
                 return Err(ValidationError::SizeTooSmall);
             }
@@ -74,6 +83,7 @@ impl Cli {
                 letter,
                 media,
                 size_bytes: size.0,
+                file_system,
             })
         } else {
             if self.hdd || self.removable {
@@ -81,6 +91,9 @@ impl Cli {
             }
             if self.size.is_some() {
                 return Err(ValidationError::SizeOnDelete);
+            }
+            if self.file_system.is_some() {
+                return Err(ValidationError::FileSystemOnDelete);
             }
             Ok(Command::Delete { letter })
         }
@@ -93,6 +106,7 @@ pub enum Command {
         letter: DriveLetter,
         media: MediaKind,
         size_bytes: u64,
+        file_system: FileSystem,
     },
     Delete {
         letter: DriveLetter,
@@ -106,11 +120,43 @@ impl fmt::Display for Command {
                 letter,
                 media,
                 size_bytes,
+                file_system,
             } => write!(
                 formatter,
-                "add {media} disk at {letter} with {size_bytes} bytes"
+                "add {media} disk at {letter} with {size_bytes} bytes formatted as {file_system}"
             ),
             Self::Delete { letter } => write!(formatter, "delete virtual disk at {letter}"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum FileSystem {
+    Fat,
+    Fat32,
+    #[default]
+    Ntfs,
+}
+
+impl fmt::Display for FileSystem {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Fat => "FAT",
+            Self::Fat32 => "FAT32",
+            Self::Ntfs => "NTFS",
+        })
+    }
+}
+
+impl FromStr for FileSystem {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_uppercase().as_str() {
+            "FAT" => Ok(Self::Fat),
+            "FAT32" => Ok(Self::Fat32),
+            "NTFS" => Ok(Self::Ntfs),
+            _ => Err("file system must be FAT, FAT32, or NTFS".into()),
         }
     }
 }
@@ -211,7 +257,9 @@ pub enum ValidationError {
     MissingSize,
     MediaOnDelete,
     SizeOnDelete,
+    FileSystemOnDelete,
     SizeTooSmall,
+    Fat32SizeTooSmall,
     SizeTooLarge,
     UnalignedSize,
 }
@@ -224,7 +272,9 @@ impl fmt::Display for ValidationError {
             Self::MissingSize => "/size is required with /add",
             Self::MediaOnDelete => "/hdd and /rem are only valid with /add",
             Self::SizeOnDelete => "/size is only valid with /add",
-            Self::SizeTooSmall => "disk size must be at least 16 MiB for NTFS formatting",
+            Self::FileSystemOnDelete => "/fs is only valid with /add",
+            Self::SizeTooSmall => "disk size must be at least 16 MiB",
+            Self::Fat32SizeTooSmall => "disk size must be at least 64 MiB for FAT32 formatting",
             Self::SizeTooLarge => "disk size must not exceed 256 MiB in this release",
             Self::UnalignedSize => "disk size must be a multiple of 512 bytes",
         };
@@ -263,6 +313,7 @@ fn normalize_one(argument: OsString) -> OsString {
         "rem" => "rem",
         "letter" => "letter",
         "size" => "size",
+        "fs" => "fs",
         "dry-run" => "dry-run",
         "timings" => "timings",
         "help" | "?" => "help",
@@ -293,8 +344,63 @@ mod tests {
                 letter: DriveLetter('R'),
                 media: MediaKind::Removable,
                 size_bytes: 128 * 1024 * 1024,
+                file_system: FileSystem::Ntfs,
             }
         );
+    }
+
+    #[test]
+    fn accepts_file_system_syntax_and_ignores_value_case() {
+        for arguments in [
+            &[
+                "wispdisk.exe",
+                "/add",
+                "/hdd",
+                "/letter:R",
+                "/size:64MiB",
+                "/fs:fat32",
+            ][..],
+            &[
+                "wispdisk.exe",
+                "/add",
+                "/hdd",
+                "/letter:R",
+                "/size:64MiB",
+                "/fs",
+                "Fat32",
+            ][..],
+            &[
+                "wispdisk.exe",
+                "/add",
+                "/hdd",
+                "/letter:R",
+                "/size:64MiB",
+                "--fs",
+                "FAT32",
+            ][..],
+        ] {
+            let parsed = parse(arguments);
+            assert!(matches!(
+                parsed.into_command().unwrap(),
+                Command::Add {
+                    file_system: FileSystem::Fat32,
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_file_system() {
+        let result = Cli::try_parse_from(normalize_windows_args([
+            "wispdisk.exe",
+            "/add",
+            "/hdd",
+            "/letter:R",
+            "/size:64MiB",
+            "/fs:exFAT",
+        ]));
+        assert!(result.is_err());
     }
 
     #[test]
@@ -344,6 +450,81 @@ mod tests {
     fn rejects_size_above_driver_limit() {
         let parsed = parse(&["wispdisk.exe", "/add", "/hdd", "/letter:R", "/size:257MiB"]);
         assert_eq!(parsed.into_command(), Err(ValidationError::SizeTooLarge));
+    }
+
+    #[test]
+    fn applies_file_system_specific_minimum_size() {
+        for file_system in ["FAT", "NTFS"] {
+            let parsed = parse(&[
+                "wispdisk.exe",
+                "/add",
+                "/hdd",
+                "/letter:R",
+                "/size:16MiB",
+                "/fs",
+                file_system,
+            ]);
+            assert!(parsed.into_command().is_ok());
+        }
+
+        let parsed = parse(&[
+            "wispdisk.exe",
+            "/add",
+            "/hdd",
+            "/letter:R",
+            "/size:63MiB",
+            "/fs:FAT32",
+        ]);
+        assert_eq!(
+            parsed.into_command(),
+            Err(ValidationError::Fat32SizeTooSmall)
+        );
+
+        let parsed = parse(&[
+            "wispdisk.exe",
+            "/add",
+            "/hdd",
+            "/letter:R",
+            "/size:64MiB",
+            "/fs:FAT32",
+        ]);
+        assert!(parsed.into_command().is_ok());
+
+        for file_system in ["FAT", "FAT32", "NTFS"] {
+            let parsed = parse(&[
+                "wispdisk.exe",
+                "/add",
+                "/hdd",
+                "/letter:R",
+                "/size:256MiB",
+                "/fs",
+                file_system,
+            ]);
+            assert!(parsed.into_command().is_ok());
+        }
+    }
+
+    #[test]
+    fn displays_selected_file_system() {
+        let command = Command::Add {
+            letter: DriveLetter('R'),
+            media: MediaKind::Fixed,
+            size_bytes: 64 * 1024 * 1024,
+            file_system: FileSystem::Fat32,
+        };
+        assert_eq!(
+            command.to_string(),
+            "add fixed disk at R: with 67108864 bytes formatted as FAT32"
+        );
+    }
+
+    #[test]
+    fn rejects_file_system_on_delete() {
+        let parsed = parse(&["wispdisk.exe", "/del", "/letter:R", "/fs:FAT"]);
+        assert_eq!(
+            parsed.into_command(),
+            Err(ValidationError::FileSystemOnDelete)
+        );
     }
 
     #[test]

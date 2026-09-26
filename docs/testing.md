@@ -62,7 +62,9 @@ Run each scenario under Verifier, then inspect the kernel log and dump state:
 - load/unload adapter repeatedly with zero LUNs;
 - add/delete fixed and removable LUNs at boundary sizes;
 - invalid, truncated, oversized, old-version, and randomized control payloads;
-- format NTFS/exFAT, fill the volume, hash data, flush, reread, and compare;
+- format FAT, FAT32, and NTFS on fixed and removable LUNs, verify the generated
+  label, fill the volume, hash data, flush, reread, and compare;
+- cover FAT and NTFS at 16 MiB, FAT32 at 64 MiB, and all three at 256 MiB;
 - parallel random reads/writes with forced add/delete races rejected safely;
 - handle-held delete, surprise removal, shutdown, restart, sleep/resume, and VM
   checkpoint restore;

@@ -20,7 +20,7 @@ use windows_sys::Win32::{
 };
 
 use crate::{
-    args::{Command, DriveLetter, MediaKind},
+    args::{Command, DriveLetter, FileSystem, MediaKind},
     protocol::{CAP_CREATE_DELETE, CAP_READ_WRITE, CreateResponse, DiskInfo},
     timing,
 };
@@ -51,12 +51,18 @@ pub(super) fn execute(command: &Command) -> Result<()> {
             letter,
             media,
             size_bytes,
-        } => add_disk(*letter, *media, *size_bytes),
+            file_system,
+        } => add_disk(*letter, *media, *size_bytes, *file_system),
         Command::Delete { letter } => delete_disk(*letter),
     }
 }
 
-fn add_disk(letter: DriveLetter, media: MediaKind, size_bytes: u64) -> Result<()> {
+fn add_disk(
+    letter: DriveLetter,
+    media: MediaKind,
+    size_bytes: u64,
+    file_system: FileSystem,
+) -> Result<()> {
     ensure_drive_letter_available(letter)?;
     timing::mark("validate drive letter");
     let adapter = ensure_adapter()?;
@@ -90,6 +96,7 @@ fn add_disk(letter: DriveLetter, media: MediaKind, size_bytes: u64) -> Result<()
             size_bytes,
             created.device_id,
             location,
+            file_system,
         )?;
         wait_for_drive_state(letter, true, DEVICE_WAIT)?;
         timing::mark("wait for drive letter");
@@ -113,7 +120,7 @@ fn add_disk(letter: DriveLetter, media: MediaKind, size_bytes: u64) -> Result<()
     }
 
     println!(
-        "created {} WispDisk {} ({size_bytes} bytes, device id {})",
+        "created {} WispDisk {} ({size_bytes} bytes, {file_system}, device id {})",
         media, letter, created.device_id
     );
     Ok(())

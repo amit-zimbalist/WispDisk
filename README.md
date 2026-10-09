@@ -151,8 +151,53 @@ WispDisk application icon used by Windows Explorer.
 The full build compiles the driver with Driver Code Analysis, test-signs the
 `.sys`, regenerates and signs the catalog, verifies both signatures and catalog
 membership, embeds those exact package bytes, signs the final executable, and
-verifies its signature and architecture. A SHA-256 manifest is emitted for each
+verifies its signature and architecture. The CLI and driver PDBs are preserved
+with the final build outputs. A SHA-256 manifest is emitted for each
 architecture under `artifacts\signing`.
+
+## Package and publish a release
+
+Build, sign, and package both release architectures locally with:
+
+```console
+powershell -File ./scripts/create-release.ps1 -Version v0.1.0
+```
+
+This writes `wispdisk-v0.1.0-windows-x64.zip`,
+`wispdisk-v0.1.0-windows-arm64.zip`, and `SHA256SUMS.txt` under
+`artifacts\release`. Each ZIP contains the signed CLI and driver package, both
+PDBs, the build manifest, and the public `.cer` certificate. The packager checks
+every input against its build manifest and verifies that the certificate
+thumbprint matches both signer thumbprints recorded by the verified build
+before creating the ZIPs. Only the public certificate is packaged; the private
+key is never exported. Packaging also fails if the certificate file reports
+that it contains a private key.
+
+If both architectures are already built, the packaging-only command is:
+
+```console
+powershell -File ./scripts/package-release.ps1 -Version v0.1.0
+```
+
+Create and push the release tag, then publish the three generated files on the
+repository's **Releases** page:
+
+```console
+git tag -a v0.1.0 -m "WispDisk v0.1.0"
+git push origin v0.1.0
+gh release create v0.1.0 artifacts/release/wispdisk-v0.1.0-windows-x64.zip artifacts/release/wispdisk-v0.1.0-windows-arm64.zip artifacts/release/SHA256SUMS.txt --verify-tag --generate-notes
+```
+
+The final command is optional: the same tag and three files can be selected in
+GitHub's **Draft a new release** web form. Building and signing intentionally
+remain local because the required WDK installation and signing certificate are
+not provisioned in CI.
+
+The resulting release is test-signed and intended only for development and
+disposable test VMs. A public production release of a modern Windows kernel
+driver requires the appropriate Microsoft driver-signing process; attaching a
+self-signed certificate to a GitHub Release does not make the driver trusted by
+Windows.
 
 By default the final executable uses the same disposable test certificate as
 the driver. Set `WISPDISK_EXE_CERT_THUMBPRINT` to use a different code-signing

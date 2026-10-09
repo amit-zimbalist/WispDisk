@@ -307,7 +307,9 @@ fn build(options: &Options) -> BuildResult<()> {
         .join(options.platform.rust_target())
         .join(options.configuration.cargo_profile())
         .join("wispdisk.exe");
+    let cargo_cli_pdb = cargo_cli.with_extension("pdb");
     confirm_pe_architecture(&cargo_cli, options.platform)?;
+    require_file(&cargo_cli_pdb, "Rust CLI symbols")?;
 
     let final_dir = repo
         .join("artifacts/bin")
@@ -316,7 +318,9 @@ fn build(options: &Options) -> BuildResult<()> {
     fs::create_dir_all(&final_dir)
         .map_err(|error| path_error("create final artifact directory", &final_dir, error))?;
     let final_cli = final_dir.join("wispdisk.exe");
+    let final_cli_pdb = final_dir.join("wispdisk.pdb");
     copy_required_file(&cargo_cli, &final_cli, "Rust CLI")?;
+    copy_required_file(&cargo_cli_pdb, &final_cli_pdb, "Rust CLI symbols")?;
 
     let exe_certificate = match env::var_os("WISPDISK_EXE_CERT_THUMBPRINT") {
         Some(value) => normalize_thumbprint(&value)?,
@@ -353,6 +357,7 @@ fn build(options: &Options) -> BuildResult<()> {
             ("DriverCatalog", &catalog_path),
             ("DriverSymbols", &pdb_path),
             ("SignedCli", &final_cli),
+            ("CliSymbols", &final_cli_pdb),
             ("PublicTestCertificate", &certificate_path),
         ],
     )?;
@@ -834,7 +839,7 @@ fn write_manifest(
     }
 
     let manifest = format!(
-        "{{\n  \"SchemaVersion\": 2,\n  \"CreatedAtUnixSeconds\": {created},\n  \"Configuration\": \"{}\",\n  \"Platform\": \"{}\",\n  \"RustTarget\": \"{}\",\n  \"PeMachine\": \"0x{:04X}\",\n  \"WindowsKitVersion\": \"{}\",\n  \"DriverTestCertificateThumbprint\": \"{}\",\n  \"ExecutableCertificateThumbprint\": \"{}\",\n  \"Files\": [\n{}\n  ]\n}}\n",
+        "{{\n  \"SchemaVersion\": 3,\n  \"CreatedAtUnixSeconds\": {created},\n  \"Configuration\": \"{}\",\n  \"Platform\": \"{}\",\n  \"RustTarget\": \"{}\",\n  \"PeMachine\": \"0x{:04X}\",\n  \"WindowsKitVersion\": \"{}\",\n  \"DriverTestCertificateThumbprint\": \"{}\",\n  \"ExecutableCertificateThumbprint\": \"{}\",\n  \"Files\": [\n{}\n  ]\n}}\n",
         options.configuration.as_msbuild(),
         options.platform.as_msbuild(),
         options.platform.rust_target(),

@@ -12,8 +12,8 @@ const LOGICAL_SECTOR_SIZE: u64 = 512;
     name = "wispdisk",
     version,
     about = "Create and remove volatile virtual disks on Windows",
-    override_usage = "wispdisk.exe /add (/hdd|/rem) /letter <LETTER> /size <SIZE> [/fs <FAT|FAT32|NTFS>]\n       wispdisk.exe /del /letter <LETTER>",
-    group(ArgGroup::new("operation").required(true).multiple(false).args(["add", "delete"])),
+    override_usage = "wispdisk.exe /add (/hdd|/rem) /letter <LETTER> /size <SIZE> [/fs <FAT|FAT32|NTFS>]\n       wispdisk.exe /del /letter <LETTER>\n       wispdisk.exe /del /adapter <INSTANCE> /id <ID>\n       wispdisk.exe /list [/json]",
+    group(ArgGroup::new("operation").required(true).multiple(false).args(["add", "delete", "list"])),
     group(ArgGroup::new("media").multiple(false).args(["hdd", "removable"]))
 )]
 pub struct Cli {
@@ -24,6 +24,22 @@ pub struct Cli {
     /// Remove a virtual disk.
     #[arg(long = "del")]
     delete: bool,
+
+    /// List driver allocations, including unformatted and unmounted disks.
+    #[arg(long)]
+    list: bool,
+
+    /// Return inventory as JSON (only with /list).
+    #[arg(long)]
+    json: bool,
+
+    /// Stable device ID for deletion without a drive letter.
+    #[arg(long)]
+    id: Option<u32>,
+
+    /// Adapter instance from /list; required with /id.
+    #[arg(long)]
+    adapter: Option<u64>,
 
     /// Present the new disk as fixed media.
     #[arg(long)]
@@ -56,9 +72,24 @@ pub struct Cli {
 
 impl Cli {
     pub fn into_command(self) -> Result<Command, ValidationError> {
-        let letter = self.letter.ok_or(ValidationError::MissingLetter)?;
-
+        if self.list {
+            if self.letter.is_some()
+                || self.size.is_some()
+                || self.file_system.is_some()
+                || self.hdd
+                || self.removable
+                || self.id.is_some()
+                || self.adapter.is_some()
+            {
+                return Err(ValidationError::UnexpectedOptions);
+            }
+            return Ok(Command::List { json: self.json });
+        }
+        if self.json || (self.add && (self.id.is_some() || self.adapter.is_some())) {
+            return Err(ValidationError::UnexpectedOptions);
+        }
         if self.add {
+            let letter = self.letter.ok_or(ValidationError::MissingLetter)?;
             let media = match (self.hdd, self.removable) {
                 (true, false) => MediaKind::Fixed,
                 (false, true) => MediaKind::Removable,
@@ -95,13 +126,27 @@ impl Cli {
             if self.file_system.is_some() {
                 return Err(ValidationError::FileSystemOnDelete);
             }
-            Ok(Command::Delete { letter })
+            match (self.letter, self.id, self.adapter) {
+                (Some(letter), None, None) => Ok(Command::Delete { letter }),
+                (None, Some(id), Some(adapter)) if id != 0 && adapter != 0 => {
+                    Ok(Command::DeleteId { adapter, id })
+                }
+                (None, None, None) => Err(ValidationError::MissingLetter),
+                _ => Err(ValidationError::DeleteIdentity),
+            }
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Command {
+    List {
+        json: bool,
+    },
+    DeleteId {
+        adapter: u64,
+        id: u32,
+    },
     Add {
         letter: DriveLetter,
         media: MediaKind,
@@ -116,6 +161,11 @@ pub enum Command {
 impl fmt::Display for Command {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::List { .. } => formatter.write_str("list WispDisk allocations"),
+            Self::DeleteId { adapter, id } => write!(
+                formatter,
+                "delete WispDisk device {id} on adapter instance {adapter}"
+            ),
             Self::Add {
                 letter,
                 media,
@@ -252,6 +302,8 @@ impl FromStr for ByteSize {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ValidationError {
+    UnexpectedOptions,
+    DeleteIdentity,
     MissingLetter,
     MissingMedia,
     MissingSize,
@@ -267,6 +319,10 @@ pub enum ValidationError {
 impl fmt::Display for ValidationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let message = match self {
+            Self::UnexpectedOptions => "options are not valid for the selected operation",
+            Self::DeleteIdentity => {
+                "delete requires either /letter or both nonzero /adapter and /id"
+            }
             Self::MissingLetter => "/letter is required",
             Self::MissingMedia => "exactly one of /hdd or /rem is required with /add",
             Self::MissingSize => "/size is required with /add",
@@ -307,6 +363,10 @@ fn normalize_one(argument: OsString) -> OsString {
         .split_once(':')
         .map_or((slash_option, None), |(name, value)| (name, Some(value)));
     let canonical = match name.to_ascii_lowercase().as_str() {
+        "list" => "list",
+        "json" => "json",
+        "id" => "id",
+        "adapter" => "adapter",
         "add" => "add",
         "del" => "del",
         "hdd" => "hdd",
@@ -329,6 +389,46 @@ fn normalize_one(argument: OsString) -> OsString {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn accepts_inventory_and_identity_deletion() {
+        assert_eq!(
+            parse(&["wispdisk.exe", "/list", "/json"]).into_command(),
+            Ok(Command::List { json: true })
+        );
+        assert_eq!(
+            parse(&["wispdisk.exe", "/del", "/adapter:123", "/id:7"]).into_command(),
+            Ok(Command::DeleteId {
+                adapter: 123,
+                id: 7
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_incomplete_or_conflicting_deletion_identity() {
+        for arguments in [
+            vec!["wispdisk.exe", "/del", "/id:7"],
+            vec!["wispdisk.exe", "/del", "/adapter:123", "/id:0"],
+            vec!["wispdisk.exe", "/del", "/adapter:123", "/id:7", "/letter:A"],
+        ] {
+            assert_eq!(
+                parse(&arguments).into_command(),
+                Err(ValidationError::DeleteIdentity)
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_mutation_options_on_inventory() {
+        assert_eq!(
+            parse(&["wispdisk.exe", "/list", "/letter:A"]).into_command(),
+            Err(ValidationError::UnexpectedOptions)
+        );
+        assert_eq!(
+            parse(&["wispdisk.exe", "/del", "/letter:A", "/json"]).into_command(),
+            Err(ValidationError::UnexpectedOptions)
+        );
+    }
     use super::*;
 
     fn parse(arguments: &[&str]) -> Cli {

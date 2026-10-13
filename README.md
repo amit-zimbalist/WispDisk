@@ -53,13 +53,16 @@ wispdisk.exe /add /hdd /letter R /size 128MiB
 wispdisk.exe /add /rem /letter:S /size:64MiB /fs:FAT32
 wispdisk.exe /add /hdd /letter T /size 32MiB /fs FAT
 wispdisk.exe /del /letter R
+wispdisk.exe /list /json
+wispdisk.exe /del /adapter <INSTANCE-FROM-LIST> /id <DEVICE-ID>
 ```
 
 Rules enforced now:
 
-- exactly one of `/add` and `/del`;
+- exactly one of `/add`, `/del`, and `/list`;
 - exactly one of `/hdd` and `/rem` for `/add`;
-- `/letter` is required;
+- `/letter` is required for creation; deletion takes either `/letter` or both
+  `/adapter` and `/id` from inventory;
 - `/size` is required only for `/add`, is from 16 MiB through 256 MiB, and is
   512-byte aligned;
 - `/fs` is valid only for `/add`, accepts `FAT`, `FAT32`, or `NTFS`
@@ -69,6 +72,22 @@ Rules enforced now:
   11-character label `WD-XXXXXXXX`, where `XXXXXXXX` is the device ID;
 - size suffixes are `B`, `KB`, `KiB`, `MB`, `MiB`, `GB`, `GiB`, `TB`, and
   `TiB`.
+
+`/list /json` reports every driver allocation, including unformatted, unmounted,
+and stopping disks, along with adapter instance, creating operation ID, current
+mount points (null when unavailable), allocated bytes, and pending mutations.
+Adapter instance and operation IDs are JSON strings to preserve their full
+64-bit precision. Listing does not install an adapter. Delete by ID discovers
+and locks/dismounts all volumes on that disk, including volumes without letters.
+Open files still cause deletion to fail safely. There is no implicit force or
+purge. Adapter instances change on reinstallation; stale identities are rejected.
+
+The 0.3 CLI requires a driver advertising operation recovery before mutation.
+An older loaded driver must be upgraded explicitly. Ambiguous create/delete
+transport failures are queried by their original operation handle; retries can
+never allocate a duplicate for the same accepted handle. If recovery cannot
+determine the outcome, the error includes the adapter instance and operation ID
+and directs automation to inventory instead of starting another mutation.
 
 Use the hidden development switch `/dry-run` to exercise validation without
 touching a driver:

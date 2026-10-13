@@ -25,8 +25,8 @@ use crate::protocol::{
 use crate::{
     args::{DriveLetter, MediaKind},
     protocol::{
-        CreateResponse, DiskInfo, ListResponse, MAXIMUM_DISK_COUNT, Operation, PROTOCOL_VERSION,
-        ProtocolMediaKind, QueryVersionResponse, RequestHeader, ResponseHeader, SRB_SIGNATURE,
+        MAXIMUM_DISK_COUNT, Operation, PROTOCOL_VERSION, ProtocolMediaKind, QueryVersionResponse,
+        RequestHeader, ResponseHeader, SRB_SIGNATURE,
     },
 };
 
@@ -42,6 +42,14 @@ const SCSI_PORT_LIMIT: u32 = 256;
 const LOGICAL_SECTOR_SIZE: u32 = 512;
 
 static NEXT_CORRELATION_ID: AtomicU64 = AtomicU64::new(1);
+
+pub(super) struct CreatedDisk {
+    pub adapter_instance: u64,
+    pub device_id: u32,
+    pub path_id: u8,
+    pub target_id: u8,
+    pub lun: u8,
+}
 
 pub(super) struct Adapter {
     handle: OwnedHandle,
@@ -141,7 +149,7 @@ impl Adapter {
         letter: DriveLetter,
         media: MediaKind,
         size_bytes: u64,
-    ) -> Result<CreateResponse> {
+    ) -> Result<CreatedDisk> {
         let handle = self.reserve_operation(Operation::CreateDisk)?;
         let request = ReservedCreateRequest {
             operation: operation_request::<ReservedCreateRequest>(
@@ -171,28 +179,20 @@ impl Adapter {
                 handle.id
             );
         }
-        Ok(CreateResponse {
-            header: response.header,
+        Ok(CreatedDisk {
+            adapter_instance: response.adapter_instance,
             device_id: response.device_id,
             path_id: response.path_id,
             target_id: response.target_id,
             lun: response.lun,
-            reserved: 0,
         })
     }
 
-    pub(super) fn list_disks(&self) -> Result<Vec<DiskInfo>> {
-        let request = request_header::<RequestHeader>(Operation::ListDisks);
-        let response: ListResponse = self.send(Operation::ListDisks, &request)?;
-        let count = response.disk_count as usize;
-        if count > response.disks.len() {
-            bail!("driver returned an invalid disk count");
-        }
-        Ok(response.disks[..count].to_vec())
-    }
-
-    pub(super) fn delete_by_id(&self, device_id: u32) -> Result<()> {
+    pub(super) fn delete_by_id(&self, instance: u64, device_id: u32) -> Result<()> {
         let handle = self.reserve_operation(Operation::DeleteDisk)?;
+        if handle.instance != instance {
+            bail!("adapter changed before deletion; refusing stale device ID {device_id}");
+        }
         let request = ReservedDeleteRequest {
             operation: operation_request::<ReservedDeleteRequest>(
                 Operation::DeleteReserved,
@@ -324,8 +324,6 @@ impl HasResponseHeader for ResponseHeader {
 }
 
 response_header!(QueryVersionResponse, header);
-response_header!(CreateResponse, header);
-response_header!(ListResponse, header);
 response_header!(OperationResponse, header);
 response_header!(StateResponse, header);
 
@@ -419,7 +417,7 @@ pub(super) fn wait_for_adapter(timeout: Duration) -> Result<Adapter> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::CreateRequest;
+    use crate::protocol::{CreateRequest, CreateResponse};
 
     fn successful_response<Response>(
         operation: Operation,

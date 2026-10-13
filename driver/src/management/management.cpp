@@ -2,6 +2,7 @@
 
 #include "control_request.h"
 #include "disk_operations.h"
+#include "support/scoped_spin_lock.h"
 
 namespace wispdisk::management {
 
@@ -11,26 +12,34 @@ static WispDiskIoControlDisposition QueueManagementRequest(
     _In_ WISPDISK_CONTROL_CODE operation,
     _In_ ULONGLONG correlationId
 ) noexcept {
-    if (adapter->AdapterStopping != 0) {
-        WriteSimpleErrorResponse(
-            controlRequest,
-            operation,
-            STATUS_DEVICE_NOT_READY,
-            correlationId
-        );
-        return WispDiskIoControlDisposition::Complete;
-    }
+    {
+        support::ScopedSpinLock lock{&adapter->LunLock};
+        if (adapter->AdapterStopping != 0) {
+            WriteSimpleErrorResponse(
+                controlRequest,
+                operation,
+                STATUS_DEVICE_NOT_READY,
+                correlationId
+            );
+            return WispDiskIoControlDisposition::Complete;
+        }
 
-    if (InterlockedCompareExchange(&adapter->ManagementBusy, 1, 0) != 0) {
-        WriteSimpleErrorResponse(
-            controlRequest,
-            operation,
-            STATUS_DEVICE_BUSY,
-            correlationId
-        );
-        return WispDiskIoControlDisposition::Complete;
+        if (InterlockedCompareExchange(&adapter->ManagementBusy, 1, 0) != 0) {
+            WriteSimpleErrorResponse(
+                controlRequest,
+                operation,
+                STATUS_DEVICE_BUSY,
+                correlationId
+            );
+            return WispDiskIoControlDisposition::Complete;
+        }
+        KeClearEvent(&adapter->ManagementIdleEvent);
+
+        // The worker can run before StorPortQueueWorkItem returns. Publish pending
+        // before handing it the SRB; on success only the worker may access it.
+        controlRequest.control->ReturnCode = static_cast<ULONG>(STATUS_PENDING);
+        controlRequest.srb->SrbStatus = SRB_STATUS_PENDING;
     }
-    KeClearEvent(&adapter->ManagementIdleEvent);
 
     const ULONG storStatus = adapter->ManagementWorker == nullptr
         ? STOR_STATUS_INVALID_DEVICE_STATE
@@ -42,6 +51,7 @@ static WispDiskIoControlDisposition QueueManagementRequest(
           );
 
     if (storStatus != STOR_STATUS_SUCCESS) {
+        support::ScopedSpinLock lock{&adapter->LunLock};
         InterlockedExchange(&adapter->ManagementBusy, 0);
         KeSetEvent(&adapter->ManagementIdleEvent, IO_NO_INCREMENT, FALSE);
         KdPrint((
@@ -58,8 +68,6 @@ static WispDiskIoControlDisposition QueueManagementRequest(
         return WispDiskIoControlDisposition::Complete;
     }
 
-    controlRequest.control->ReturnCode = static_cast<ULONG>(STATUS_PENDING);
-    controlRequest.srb->SrbStatus = SRB_STATUS_PENDING;
     return WispDiskIoControlDisposition::Pending;
 }
 
@@ -184,11 +192,22 @@ VOID WispDiskManagementWorker(PVOID deviceExtension, PVOID context, PVOID worker
         srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
     }
 
-    if (adapter != nullptr) {
-        InterlockedExchange(&adapter->ManagementBusy, 0);
-        KeSetEvent(&adapter->ManagementIdleEvent, IO_NO_INCREMENT, FALSE);
-    }
+    // Copy notification intent before RequestComplete transfers SRB ownership.
+    const bool busChanged = controlRequest &&
+        controlRequest.control->ReturnCode == static_cast<ULONG>(STATUS_SUCCESS) &&
+        (controlRequest.control->ControlCode == WispDiskControlCreateDisk ||
+         controlRequest.control->ControlCode == WispDiskControlDeleteDisk);
     if (adapter != nullptr && srb != nullptr) {
         StorPortNotification(RequestComplete, adapter, srb);
+    }
+    if (adapter != nullptr) {
+        if (busChanged) {
+            StorPortNotification(BusChangeDetected, adapter, static_cast<ULONG>(0));
+        }
+        // Teardown must wait through completion and bus notification. This is
+        // the final adapter access by the worker.
+        wispdisk::support::ScopedSpinLock lock{&adapter->LunLock};
+        InterlockedExchange(&adapter->ManagementBusy, 0);
+        KeSetEvent(&adapter->ManagementIdleEvent, IO_NO_INCREMENT, FALSE);
     }
 }

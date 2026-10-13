@@ -261,7 +261,10 @@ VOID WispDiskHwFreeAdapterResources(PVOID deviceExtension) {
     }
 
     KdPrint(("WispDisk: releasing adapter resources\n"));
-    InterlockedExchange(&adapter->AdapterStopping, 1);
+    {
+        wispdisk::support::ScopedSpinLock lock{&adapter->LunLock};
+        InterlockedExchange(&adapter->AdapterStopping, 1);
+    }
     KeWaitForSingleObject(
         &adapter->ManagementIdleEvent,
         Executive,
@@ -273,7 +276,17 @@ VOID WispDiskHwFreeAdapterResources(PVOID deviceExtension) {
     wispdisk::driver::MarkAllLunsStopping(adapter);
     wispdisk::driver::FreeLunResources(adapter);
     if (adapter->ManagementWorker != nullptr) {
-        StorPortFreeWorker(adapter, adapter->ManagementWorker);
+        // Idle means the callback has stopped accessing the adapter. StorPort
+        // may still be unwinding that callback; wait before freeing its worker.
+        ULONG status;
+        do {
+            status = StorPortFreeWorker(adapter, adapter->ManagementWorker);
+            if (status == STOR_STATUS_BUSY) {
+                LARGE_INTEGER delay{};
+                delay.QuadPart = -10000; // one millisecond, relative
+                KeDelayExecutionThread(KernelMode, FALSE, &delay);
+            }
+        } while (status == STOR_STATUS_BUSY);
         adapter->ManagementWorker = nullptr;
     }
     adapter->Signature = 0;

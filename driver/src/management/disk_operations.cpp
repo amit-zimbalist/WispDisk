@@ -261,7 +261,6 @@ void ProcessCreateRequest(
         selectedLun,
         request.SizeBytes
     ));
-    StorPortNotification(BusChangeDetected, adapter, static_cast<ULONG>(0));
     WriteCreateResponse(
         controlRequest,
         request,
@@ -289,7 +288,6 @@ void ProcessDeleteRequest(
         return;
     }
 
-    StorPortNotification(BusChangeDetected, adapter, static_cast<ULONG>(0));
     KeWaitForSingleObject(
         &selected->NoActiveRequestsEvent,
         Executive,
@@ -304,7 +302,6 @@ void ProcessDeleteRequest(
     }
 
     KdPrint(("WispDisk: deleted disk id=%lu\n", request.DeviceId));
-    StorPortNotification(BusChangeDetected, adapter, static_cast<ULONG>(0));
     WriteDeleteResponse(controlRequest, request, STATUS_SUCCESS);
 }
 

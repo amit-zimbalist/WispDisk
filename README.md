@@ -88,6 +88,8 @@ transport failures are queried by their original operation handle; retries can
 never allocate a duplicate for the same accepted handle. If recovery cannot
 determine the outcome, the error includes the adapter instance and operation ID
 and directs automation to inventory instead of starting another mutation.
+Exit code 3 identifies an unresolved mutation outcome (including an unresolved
+rollback), code 1 an ordinary execution failure, and code 2 invalid arguments.
 
 Use the hidden development switch `/dry-run` to exercise validation without
 touching a driver:

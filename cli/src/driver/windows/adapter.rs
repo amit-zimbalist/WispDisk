@@ -131,8 +131,20 @@ impl Adapter {
         resolve_operation(
             handle,
             mutation,
-            submit,
-            || self.query_operation(handle),
+            {
+                let mut submit = submit;
+                move || {
+                    crate::timing::measure(
+                        if mutation == Operation::CreateDisk {
+                            "send driver create request"
+                        } else {
+                            "send driver delete request"
+                        },
+                        &mut submit,
+                    )
+                }
+            },
+            || crate::timing::measure("query management outcome", || self.query_operation(handle)),
             || {
                 let now = Instant::now();
                 if now >= deadline {
@@ -174,9 +186,9 @@ impl Adapter {
             || response.target_id != 0
             || response.lun as usize >= MAXIMUM_DISK_COUNT
         {
-            bail!(
-                "driver returned an invalid created disk identity for operation {}",
-                handle.id
+            return Err(
+                anyhow::anyhow!("driver returned an invalid created disk identity")
+                    .context(UnresolvedOutcome(handle)),
             );
         }
         Ok(CreatedDisk {

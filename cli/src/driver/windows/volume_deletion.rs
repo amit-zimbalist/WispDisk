@@ -13,7 +13,7 @@ use windows_sys::Win32::{
     },
     Storage::FileSystem::{
         DeleteVolumeMountPointW, FindFirstVolumeW, FindNextVolumeW, FindVolumeClose,
-        GetVolumePathNamesForVolumeNameW,
+        GetVolumePathNamesForVolumeNameW, SetVolumeMountPointW,
     },
     System::Ioctl::{FSCTL_DISMOUNT_VOLUME, FSCTL_LOCK_VOLUME},
 };
@@ -152,12 +152,14 @@ impl VolumeDeletion {
         }
         Ok(())
     }
+
     pub(super) fn dismount(&self) -> Result<()> {
         for (_, handle) in &self.volumes {
             volume_control(handle, FSCTL_DISMOUNT_VOLUME, "dismount target volume")?;
         }
         Ok(())
     }
+
     pub(super) fn remove_mounts(&mut self) -> Result<()> {
         for (volume, _) in &self.volumes {
             for point in &volume.mount_points {
@@ -181,8 +183,19 @@ impl VolumeDeletion {
                 // Closing the owned handle releases any acquired lock.
                 continue;
             }
-            for (point, _) in points {
-                if let Err(error) = restore_mount_and_unlock(handle, point, &volume.name) {
+            let count = points.len();
+            for (index, (point, _)) in points.into_iter().enumerate() {
+                // Restore all paths while the volume remains locked, then
+                // unlock once. A volume may have both a letter and directories.
+                let restoration = if index + 1 == count {
+                    restore_mount_and_unlock(handle, point, &volume.name)
+                } else if unsafe { SetVolumeMountPointW(point.as_ptr(), volume.name.as_ptr()) } == 0
+                {
+                    Err(last_os_error("restore volume mount point"))
+                } else {
+                    Ok(())
+                };
+                if let Err(error) = restoration {
                     failure = Some(match failure {
                         Some(first) => {
                             recovery_failed(first, "another mount restoration failed", error)

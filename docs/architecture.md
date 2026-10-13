@@ -185,6 +185,24 @@ an online-only inventory for compatibility. A successful delete is published
 only after backing-store release; Windows PnP disappearance is a separate CLI
 completion condition.
 
+Management SRBs are pending before work is queued. After successful queueing,
+only the worker accesses the SRB. It finalizes the response, completes the SRB,
+and notifies the bus using retained adapter context. Its idle signal follows all
+completion and notification accesses and is protected by LunLock. Teardown
+closes admission under that lock and waits until the worker can be freed.
+
+The CLI queries the original reserved handle after a transport failure. Reserved
+can be submitted again, Pending is polled, Succeeded returns the original disk,
+and Failed is a confirmed rejection. Unknown outcomes retain recovery identity
+and never cause another create. Initialization rollback uses the ordinary safe
+deletion path, including volume locks, driver reconciliation, and PnP checks.
+
+Deletion by adapter instance/device ID enumerates volume GUIDs and mount points,
+matches them by physical disk and verified SCSI location, and locks every target
+volume before dismount/removal. After rejection it restores mounts only when
+inventory confirms that the same allocation remains online. An unresolved
+deletion is reported for subsequent inventory-based recovery.
+
 ## Milestones
 
 1. Skeleton: CLI grammar/tests, package embedding, INF, miniport registration,

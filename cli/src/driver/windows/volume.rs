@@ -4,6 +4,7 @@ use anyhow::{Context, Result, bail, ensure};
 
 use std::{
     ffi::OsStr,
+    fmt, io,
     mem::size_of,
     ptr::{null, null_mut},
     thread,
@@ -18,7 +19,7 @@ use windows_sys::Win32::{
     },
     System::{
         IO::DeviceIoControl,
-        Ioctl::{FSCTL_UNLOCK_VOLUME, VOLUME_DISK_EXTENTS},
+        Ioctl::{FSCTL_LOCK_VOLUME, FSCTL_UNLOCK_VOLUME, VOLUME_DISK_EXTENTS},
     },
 };
 
@@ -117,10 +118,29 @@ pub(super) fn volume_control(volume: &OwnedHandle, code: u32, operation: &str) -
         )
     } == 0
     {
-        Err(last_os_error(operation))
+        let error = io::Error::last_os_error();
+        if code == FSCTL_LOCK_VOLUME {
+            Err(anyhow::Error::new(error).context(VolumeLockFailure))
+        } else {
+            Err(anyhow::Error::new(error).context(operation.to_owned()))
+        }
     } else {
         Ok(())
     }
+}
+
+#[derive(Debug)]
+struct VolumeLockFailure;
+impl fmt::Display for VolumeLockFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("lock target volume")
+    }
+}
+pub(super) fn is_lock_refusal(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<VolumeLockFailure>().is_some()
+        && error
+            .downcast_ref::<io::Error>()
+            .is_some_and(|error| error.raw_os_error() == Some(5))
 }
 
 pub(super) fn restore_mount_and_unlock(
@@ -181,4 +201,20 @@ pub(super) fn wait_for_drive_state(
 
 pub(super) fn mount_point(letter: DriveLetter) -> Vec<u16> {
     wide(OsStr::new(&format!("{}:\\", char::from(letter.as_ascii()))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn only_access_denied_during_locking_is_a_retryable_lock_refusal() {
+        let lock = anyhow::Error::new(io::Error::from_raw_os_error(5)).context(VolumeLockFailure);
+        assert!(is_lock_refusal(&lock));
+        let opening =
+            anyhow::Error::new(io::Error::from_raw_os_error(5)).context("open target volume");
+        assert!(!is_lock_refusal(&opening));
+        let transport =
+            anyhow::Error::new(io::Error::from_raw_os_error(1117)).context(VolumeLockFailure);
+        assert!(!is_lock_refusal(&transport));
+    }
 }

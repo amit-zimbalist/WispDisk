@@ -122,6 +122,12 @@ static PUCHAR DetachBackingStore(
 
 static void FinalizeRemoval(PWISPDISK_ADAPTER_EXTENSION adapter, PWISPDISK_LUN lun) noexcept {
     support::ScopedSpinLock lock{&adapter->LunLock};
+    // Legacy clients can also delete a recovered create. Release its pinned
+    // record only when the backing allocation has actually been freed.
+    for (auto& record : adapter->Operations) {
+        if (record.Mutation == WispDiskControlCreateDisk && record.DeviceId == lun->DeviceId &&
+            record.State == WispDiskOperationSucceeded) record.State = WispDiskOperationDeleted;
+    }
     if (adapter->TotalAllocatedBytes >= lun->SizeBytes) {
         adapter->TotalAllocatedBytes -= lun->SizeBytes;
     } else {

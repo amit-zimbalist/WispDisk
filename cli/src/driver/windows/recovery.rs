@@ -82,7 +82,7 @@ pub(super) fn resolve_operation(
                     {
                         return Ok(reply);
                     }
-                    state if state == OperationState::Failed as u32 => {
+                    state if state == OperationState::Failed as u32 && reply.result_status < 0 => {
                         return Err(Error::new(DriverRejection(reply.result_status)));
                     }
                     state if state == OperationState::Deleted as u32 => bail!(
@@ -156,11 +156,30 @@ pub(super) fn recovery_failed(primary: Error, action: impl Into<String>, recover
     })
 }
 
+pub(super) fn is_unresolved(error: &Error) -> bool {
+    error.downcast_ref::<UnresolvedOutcome>().is_some()
+        || error
+            .downcast_ref::<RecoveryFailure>()
+            .is_some_and(|failure| is_unresolved(&failure.cause))
+}
+
 #[cfg(test)]
 mod tests {
     use std::io;
 
     use super::*;
+
+    #[test]
+    fn unresolved_rollback_retains_the_distinct_exit_status() {
+        let rollback =
+            Error::msg("delete transport unavailable").context(UnresolvedOutcome(handle()));
+        let combined = recovery_failed(
+            Error::msg("format failed"),
+            "rollback also failed",
+            rollback,
+        );
+        assert_eq!(crate::driver::error_exit_code(&combined), 3);
+    }
 
     fn handle() -> OperationHandle {
         OperationHandle {
@@ -271,6 +290,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.downcast_ref::<UnresolvedOutcome>().is_some());
+        assert_eq!(crate::driver::error_exit_code(&error), 3);
         assert_eq!(
             error.downcast_ref::<io::Error>().unwrap().raw_os_error(),
             Some(1117)

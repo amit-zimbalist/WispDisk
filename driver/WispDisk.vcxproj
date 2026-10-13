@@ -121,6 +121,7 @@
     <ClInclude Include="src\management\disk_operations.h" />
     <ClInclude Include="src\management\management.h" />
     <ClInclude Include="src\management\operation_state.h" />
+    <ClInclude Include="src\management\diagnostics.h" />
     <ClInclude Include="src\scsi\read_write.h" />
     <ClInclude Include="src\scsi\scsi.h" />
     <ClInclude Include="src\scsi\scsi_commands.h" />

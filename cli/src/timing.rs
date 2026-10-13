@@ -16,6 +16,10 @@ pub(crate) fn mark(phase: &str) {
     TIMING.mark(phase);
 }
 
+pub(crate) fn measure<T, E>(phase: &str, action: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
+    TIMING.measure(phase, action)
+}
+
 // Owning the slot lets tests use independent instances rather than resetting
 // or enabling the process-wide timer shared by the test harness.
 struct PhaseTiming {
@@ -23,6 +27,30 @@ struct PhaseTiming {
 }
 
 impl PhaseTiming {
+    fn measure<T, E>(&self, phase: &str, action: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
+        let Some(slot) = self.timer.get() else {
+            return action();
+        };
+        let started = Instant::now();
+        let result = action();
+        let now = Instant::now();
+        if let Ok(mut timer) = slot.lock() {
+            let total = now.duration_since(timer.started);
+            timer.phase_started = now;
+            let label = if result.is_err() {
+                format!("{phase} [failed]")
+            } else {
+                phase.to_owned()
+            };
+            let _ = write_measurement(
+                &mut io::stderr().lock(),
+                &label,
+                now.duration_since(started),
+                total,
+            );
+        }
+        result
+    }
     const fn new() -> Self {
         Self {
             timer: OnceLock::new(),
@@ -89,6 +117,18 @@ mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use super::*;
+
+    #[test]
+    fn measurement_preserves_failures_and_disabled_state() {
+        let timing = PhaseTiming::new();
+        assert_eq!(
+            timing.measure("failed phase", || Err::<(), _>(1117)),
+            Err(1117)
+        );
+        assert!(timing.timer.get().is_none());
+        timing.init(true);
+        assert_eq!(timing.measure("failed phase", || Err::<(), _>(5)), Err(5));
+    }
 
     #[test]
     fn disabled_timing_does_not_initialize_on_marks() {

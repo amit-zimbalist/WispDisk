@@ -64,6 +64,21 @@ struct WISPDISK_ADAPTER_EXTENSION {
     WISPDISK_OPERATION_RECORD Operations[kMaximumOperationCount];
     ULONGLONG TotalAllocatedBytes;
     WISPDISK_LUN Luns[WISPDISK_MAXIMUM_DISK_COUNT];
+#if DBG
+    ULONG TraceEnabled;
+    ULONG FaultMode;
+    ULONG FaultRemaining;
+    ULONGLONG TraceSequence;
+    struct TraceEntry {
+        ULONGLONG Sequence;
+        ULONGLONG OperationId;
+        LONGLONG Timestamp;
+        ULONG DeviceId;
+        ULONG Phase;
+        NTSTATUS Status;
+        ULONG SrbStatus;
+    } Trace[128];
+#endif
 };
 using PWISPDISK_ADAPTER_EXTENSION = WISPDISK_ADAPTER_EXTENSION*;
 

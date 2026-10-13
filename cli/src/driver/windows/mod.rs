@@ -43,6 +43,10 @@ use self::{
 const DEVICE_WAIT: Duration = Duration::from_secs(30);
 const RETRY_INTERVAL: Duration = Duration::from_millis(200);
 
+pub(super) fn is_unresolved(error: &anyhow::Error) -> bool {
+    recovery::is_unresolved(error)
+}
+
 pub(super) fn execute(command: &Command) -> Result<()> {
     match command {
         Command::Add {
@@ -82,7 +86,7 @@ fn add_disk(
 
     adapter.require_recovery()?;
     let created = adapter.create_disk(letter, media, size_bytes)?;
-    timing::mark("allocate and zero backing store");
+    timing::mark("create allocation confirmed");
 
     let result: Result<()> = (|| {
         ensure_drive_letter_available(letter)?;
@@ -91,6 +95,12 @@ fn add_disk(
         timing::mark("wait for disk interface");
         verify_physical_disk_location(disk_number, location)?;
         timing::mark("verify disk identity");
+        #[cfg(debug_assertions)]
+        if std::env::var_os("WISPDISK_TEST_PROVISIONING_FAILURE").as_deref()
+            == Some(std::ffi::OsStr::new("1"))
+        {
+            bail!("injected provisioning failure");
+        }
         initialize_and_format(
             disk_number,
             letter,
@@ -108,14 +118,27 @@ fn add_disk(
     })();
 
     if let Err(error) = result {
-        let rollback = delete_allocation(&adapter, created.adapter_instance, created.device_id);
+        let deadline = std::time::Instant::now() + DEVICE_WAIT;
+        let rollback = loop {
+            match delete_allocation(&adapter, created.adapter_instance, created.device_id) {
+                Err(error)
+                    if volume::is_lock_refusal(&error) && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(RETRY_INTERVAL);
+                }
+                result => break result,
+            }
+        };
         return match rollback {
             Ok(()) => Err(error.context(
                 "failed to initialize the new disk; the driver allocation was rolled back",
             )),
             Err(rollback_error) => Err(recovery_failed(
                 error,
-                "failed to initialize the new disk; driver rollback also failed",
+                format!(
+                    "failed to initialize device {} on adapter instance {}; driver rollback also failed",
+                    created.device_id, created.adapter_instance
+                ),
                 rollback_error,
             )),
         };
@@ -166,7 +189,9 @@ fn delete_disk(letter: DriveLetter) -> Result<()> {
     }
     let (_, instance, id) = matched.context("volume is not uniquely owned by WispDisk")?;
     delete_by_identity(instance, id)?;
-    wait_for_drive_state(letter, false, DEVICE_WAIT)?;
+    timing::measure("wait for drive-letter disappearance", || {
+        wait_for_drive_state(letter, false, DEVICE_WAIT)
+    })?;
     Ok(())
 }
 
@@ -202,14 +227,17 @@ fn delete_allocation(adapter: &Adapter, instance: u64, id: u32) -> Result<()> {
     }
     let location = disk_location(adapter, entry);
     let number = wait_for_physical_disk(location, DEVICE_WAIT)?;
-    let mut volumes = VolumeDeletion::open(number, location)?;
+    timing::mark("resolve deletion identity");
+    let mut volumes = timing::measure("open target volumes", || {
+        VolumeDeletion::open(number, location)
+    })?;
     let prepared = (|| {
-        volumes.lock()?;
-        volumes.dismount()?;
-        volumes.remove_mounts()
+        timing::measure("lock target volumes", || volumes.lock())?;
+        timing::measure("dismount target volumes", || volumes.dismount())?;
+        timing::measure("remove volume mount points", || volumes.remove_mounts())
     })();
     if let Err(error) = prepared {
-        return match volumes.restore() {
+        return match timing::measure("restore volume mount points", || volumes.restore()) {
             Ok(()) => Err(error),
             Err(restore) => Err(recovery_failed(
                 error,
@@ -229,7 +257,7 @@ fn delete_allocation(adapter: &Adapter, instance: u64, id: u32) -> Result<()> {
                         .any(|entry| entry.disk.device_id == id && entry.state == 1)
             });
         if still_online {
-            return match volumes.restore() {
+            return match timing::measure("restore volume mount points", || volumes.restore()) {
                 Ok(()) => Err(error.context("deletion rejected; original mount points restored")),
                 Err(restore) => Err(recovery_failed(
                     error,
@@ -243,7 +271,9 @@ fn delete_allocation(adapter: &Adapter, instance: u64, id: u32) -> Result<()> {
         )));
     }
     drop(volumes);
-    wait_for_physical_disk_absent(number, location, DEVICE_WAIT)?;
+    timing::measure("wait for device disappearance", || {
+        wait_for_physical_disk_absent(number, location, DEVICE_WAIT)
+    }).with_context(|| format!("driver allocation for device {id} was removed, but Windows disappearance was not confirmed"))?;
     Ok(())
 }
 

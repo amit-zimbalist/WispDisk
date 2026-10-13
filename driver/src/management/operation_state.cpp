@@ -1,5 +1,6 @@
 #include "operation_state.h"
 #include "disk_operations.h"
+#include "diagnostics.h"
 #include "support/scoped_spin_lock.h"
 
 namespace wispdisk::management {
@@ -145,6 +146,7 @@ bool AcceptReservedOperation(PWISPDISK_ADAPTER_EXTENSION adapter, const ControlR
     }
     record->Create = createRequest;
     record->Delete = deleteRequest;
+    if (!create) record->DeviceId = deleteRequest.DeviceId;
     record->State = WispDiskOperationPending;
     return true;
 }
@@ -156,6 +158,7 @@ void FailReservedOperation(PWISPDISK_ADAPTER_EXTENSION adapter, const ControlReq
     if (record != nullptr) {
         record->State = WispDiskOperationFailed;
         record->Result = status;
+        TraceLocked(adapter, record->Id, record->DeviceId, TracePhase::Rejected, status);
         WriteOperation(adapter, control, *record, request.Header.CorrelationId);
     }
 }
@@ -194,6 +197,8 @@ void ProcessReservedOperation(PWISPDISK_ADAPTER_EXTENSION adapter, const Control
     {
         support::ScopedSpinLock lock{&adapter->LunLock};
         *FindOperation(adapter, identity.OperationId) = snapshot;
+        TraceLocked(adapter, snapshot.Id, snapshot.DeviceId,
+            NT_SUCCESS(snapshot.Result) ? TracePhase::Committed : TracePhase::Rejected, snapshot.Result);
         if (NT_SUCCESS(snapshot.Result)) {
             if (snapshot.Mutation == WispDiskControlCreateDisk) {
                 adapter->Luns[snapshot.Lun].CreateOperationId = snapshot.Id;

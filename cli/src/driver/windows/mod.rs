@@ -80,10 +80,12 @@ fn add_disk(
         bail!("loaded driver does not support removable-media disks");
     }
 
+    adapter.require_recovery()?;
     let created = adapter.create_disk(letter, media, size_bytes)?;
     timing::mark("allocate and zero backing store");
 
     let result: Result<()> = (|| {
+        ensure_drive_letter_available(letter)?;
         let location = expected_location(&adapter, &created);
         let disk_number = wait_for_physical_disk(location, DEVICE_WAIT)?;
         timing::mark("wait for disk interface");

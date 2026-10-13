@@ -17,17 +17,22 @@ use windows_sys::Win32::{
     System::IO::DeviceIoControl,
 };
 
+use crate::protocol::{
+    CAP_OPERATION_RECOVERY, OperationRequest, OperationResponse, ReserveRequest,
+    ReservedCreateRequest, ReservedDeleteRequest, StateResponse,
+};
+
 use crate::{
     args::{DriveLetter, MediaKind},
     protocol::{
-        CreateRequest, CreateResponse, DeleteRequest, DiskInfo, ListResponse, MAXIMUM_DISK_COUNT,
-        Operation, PROTOCOL_VERSION, ProtocolMediaKind, QueryVersionResponse, RequestHeader,
-        ResponseHeader, SRB_SIGNATURE,
+        CreateResponse, DiskInfo, ListResponse, MAXIMUM_DISK_COUNT, Operation, PROTOCOL_VERSION,
+        ProtocolMediaKind, QueryVersionResponse, RequestHeader, ResponseHeader, SRB_SIGNATURE,
     },
 };
 
 use super::{
-    RETRY_INTERVAL,
+    DEVICE_WAIT, RETRY_INTERVAL,
+    recovery::{DriverRejection, OperationHandle, UnresolvedOutcome, resolve_operation},
     win32::{OwnedHandle, last_os_error, open_device},
 };
 
@@ -60,14 +65,89 @@ impl Adapter {
         Ok(response)
     }
 
+    pub(super) fn require_recovery(&self) -> Result<()> {
+        if self.query_version()?.capabilities & CAP_OPERATION_RECOVERY == 0 {
+            bail!(
+                "loaded WispDisk driver lacks operation recovery; upgrade the driver before creating or deleting disks"
+            );
+        }
+        Ok(())
+    }
+
+    pub(super) fn reserve_operation(&self, mutation: Operation) -> Result<OperationHandle> {
+        self.require_recovery()?;
+        let request = ReserveRequest {
+            header: request_header::<ReserveRequest>(Operation::Reserve),
+            mutation: mutation as u32,
+            reserved: 0,
+        };
+        let response: OperationResponse = self.send(Operation::Reserve, &request)?;
+        if response.adapter_instance == 0
+            || response.operation_id == 0
+            || response.mutation != mutation as u32
+            || response.state != 1
+        {
+            bail!("driver returned an invalid operation reservation");
+        }
+        Ok(OperationHandle {
+            instance: response.adapter_instance,
+            id: response.operation_id,
+        })
+    }
+
+    pub(super) fn query_operation(&self, handle: OperationHandle) -> Result<OperationResponse> {
+        self.send(
+            Operation::QueryResult,
+            &operation_request::<OperationRequest>(Operation::QueryResult, handle),
+        )
+    }
+
+    pub(super) fn state(&self) -> Result<StateResponse> {
+        let response: StateResponse = self.send(
+            Operation::ListState,
+            &request_header::<RequestHeader>(Operation::ListState),
+        )?;
+        if response.disk_count as usize > response.disks.len() || response.adapter_instance == 0 {
+            bail!("driver returned invalid inventory");
+        }
+        Ok(response)
+    }
+
+    fn recover(
+        &self,
+        handle: OperationHandle,
+        mutation: Operation,
+        submit: impl FnMut() -> Result<OperationResponse>,
+    ) -> Result<OperationResponse> {
+        let deadline = Instant::now() + DEVICE_WAIT;
+        resolve_operation(
+            handle,
+            mutation,
+            submit,
+            || self.query_operation(handle),
+            || {
+                let now = Instant::now();
+                if now >= deadline {
+                    return false;
+                }
+                thread::sleep(RETRY_INTERVAL.min(deadline - now));
+                Instant::now() < deadline
+            },
+        )
+    }
+
     pub(super) fn create_disk(
         &self,
         letter: DriveLetter,
         media: MediaKind,
         size_bytes: u64,
     ) -> Result<CreateResponse> {
-        let request = CreateRequest {
-            header: request_header::<CreateRequest>(Operation::CreateDisk),
+        let handle = self.reserve_operation(Operation::CreateDisk)?;
+        let request = ReservedCreateRequest {
+            operation: operation_request::<ReservedCreateRequest>(
+                Operation::CreateReserved,
+                handle,
+            ),
             size_bytes,
             logical_sector_size: LOGICAL_SECTOR_SIZE,
             media_kind: match media {
@@ -78,7 +158,27 @@ impl Adapter {
             reserved16: 0,
             reserved32: 0,
         };
-        self.send(Operation::CreateDisk, &request)
+        let response = self.recover(handle, Operation::CreateDisk, || {
+            self.send(Operation::CreateReserved, &request)
+        })?;
+        if response.device_id == 0
+            || response.path_id != 0
+            || response.target_id != 0
+            || response.lun as usize >= MAXIMUM_DISK_COUNT
+        {
+            bail!(
+                "driver returned an invalid created disk identity for operation {}",
+                handle.id
+            );
+        }
+        Ok(CreateResponse {
+            header: response.header,
+            device_id: response.device_id,
+            path_id: response.path_id,
+            target_id: response.target_id,
+            lun: response.lun,
+            reserved: 0,
+        })
     }
 
     pub(super) fn list_disks(&self) -> Result<Vec<DiskInfo>> {
@@ -92,12 +192,33 @@ impl Adapter {
     }
 
     pub(super) fn delete_by_id(&self, device_id: u32) -> Result<()> {
-        let request = DeleteRequest {
-            header: request_header::<DeleteRequest>(Operation::DeleteDisk),
+        let handle = self.reserve_operation(Operation::DeleteDisk)?;
+        let request = ReservedDeleteRequest {
+            operation: operation_request::<ReservedDeleteRequest>(
+                Operation::DeleteReserved,
+                handle,
+            ),
             device_id,
             reserved: 0,
         };
-        let _: ResponseHeader = self.send(Operation::DeleteDisk, &request)?;
+        self.recover(handle, Operation::DeleteDisk, || {
+            self.send(Operation::DeleteReserved, &request)
+        })?;
+        let state = self
+            .state()
+            .map_err(|error| error.context(UnresolvedOutcome(handle)))?;
+        if state.adapter_instance != handle.instance
+            || state.disks[..state.disk_count as usize]
+                .iter()
+                .any(|entry| entry.disk.device_id == device_id)
+        {
+            return Err(anyhow::anyhow!(
+                "delete operation {} completed but device {} removal could not be confirmed",
+                handle.id,
+                device_id
+            )
+            .context(UnresolvedOutcome(handle)));
+        }
         Ok(())
     }
 
@@ -205,6 +326,8 @@ impl HasResponseHeader for ResponseHeader {
 response_header!(QueryVersionResponse, header);
 response_header!(CreateResponse, header);
 response_header!(ListResponse, header);
+response_header!(OperationResponse, header);
+response_header!(StateResponse, header);
 
 fn request_header<T>(operation: Operation) -> RequestHeader {
     RequestHeader {
@@ -213,6 +336,14 @@ fn request_header<T>(operation: Operation) -> RequestHeader {
         operation: operation as u32,
         flags: 0,
         correlation_id: NEXT_CORRELATION_ID.fetch_add(1, Ordering::Relaxed),
+    }
+}
+
+fn operation_request<T>(operation: Operation, handle: OperationHandle) -> OperationRequest {
+    OperationRequest {
+        header: request_header::<T>(operation),
+        adapter_instance: handle.instance,
+        operation_id: handle.id,
     }
 }
 
@@ -247,11 +378,12 @@ fn validate_response_header(
     }
     let status = header.status;
     if status < 0 || control.ReturnCode & 0x8000_0000 != 0 {
-        bail!(
-            "driver rejected {:?} with NTSTATUS 0x{:08X}",
-            operation,
-            status as u32
-        );
+        let rejected = if status < 0 {
+            status
+        } else {
+            control.ReturnCode as i32
+        };
+        bail!(DriverRejection(rejected));
     }
     Ok(())
 }
@@ -287,6 +419,7 @@ pub(super) fn wait_for_adapter(timeout: Duration) -> Result<Adapter> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::CreateRequest;
 
     fn successful_response<Response>(
         operation: Operation,

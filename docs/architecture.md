@@ -158,6 +158,33 @@ The Rust definitions in `cli/src/protocol.rs` mirror
 sides. Future changes append fields and increase `StructSize`; they do not
 silently reinterpret version 1 layouts.
 
+### Recoverable management operations
+
+`WISPDISK_CAP_OPERATION_RECOVERY` advertises additional operations without
+changing the original v1 layouts. ReserveOperation allocates a bookkeeping
+handle `(AdapterInstance, OperationId)` for create or delete; it does not
+allocate a LUN. CreateReserved/DeleteReserved bind immutable parameters and
+publish Pending under the same lock used for management admission. Replaying
+an accepted handle returns its state and result, never another mutation.
+QueryOperation returns Reserved, Pending, Succeeded, Failed, or Deleted. Deleted
+means a successful create's allocation has since been removed and cannot be
+resurrected by replay.
+
+The fixed 128-record table never evicts pending mutations or successful creates
+with live allocations. Empty slots are used first, then the oldest unused
+reservation or terminal record is reclaimed. An unknown/expired handle is
+rejected, including for mutation; operation IDs never wrap or become valid
+again within an adapter instance. AdapterInstance changes on adapter creation.
+These records are volatile and do not promise persistence across reboot or
+checkpoint restore. Transport recovery must retain the original handle.
+
+ListState exposes online and stopping LUNs, their creating operation IDs,
+allocated bytes, and pending mutations. Stopping LUNs remain visible and counted
+until backing memory has actually been freed. The original ListDisks remains
+an online-only inventory for compatibility. A successful delete is published
+only after backing-store release; Windows PnP disappearance is a separate CLI
+completion condition.
+
 ## Milestones
 
 1. Skeleton: CLI grammar/tests, package embedding, INF, miniport registration,

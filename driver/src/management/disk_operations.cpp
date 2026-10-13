@@ -74,16 +74,15 @@ static NTSTATUS CommitNewLun(
         return STATUS_DEVICE_NOT_READY;
     }
 
+    if (adapter->NextDeviceId == 0) return STATUS_INSUFFICIENT_RESOURCES;
     *deviceId = adapter->NextDeviceId++;
-    if (*deviceId == 0) {
-        *deviceId = adapter->NextDeviceId++;
-    }
 
     lun->DeviceId = *deviceId;
     lun->Lun = static_cast<UCHAR>(selectedLun);
     lun->MediaKind = request.MediaKind;
     lun->RequestedDriveLetter = request.RequestedDriveLetter;
     lun->SizeBytes = request.SizeBytes;
+    lun->CreateOperationId = 0;
     lun->BackingStore = static_cast<PUCHAR>(allocation->release());
     lun->ActiveRequests = 0;
     KeSetEvent(&lun->NoActiveRequestsEvent, IO_NO_INCREMENT, FALSE);
@@ -117,6 +116,12 @@ static PUCHAR DetachBackingStore(
     }
 
     auto* backingStore = lun->BackingStore;
+    lun->BackingStore = nullptr;
+    return backingStore;
+}
+
+static void FinalizeRemoval(PWISPDISK_ADAPTER_EXTENSION adapter, PWISPDISK_LUN lun) noexcept {
+    support::ScopedSpinLock lock{&adapter->LunLock};
     if (adapter->TotalAllocatedBytes >= lun->SizeBytes) {
         adapter->TotalAllocatedBytes -= lun->SizeBytes;
     } else {
@@ -128,8 +133,8 @@ static PUCHAR DetachBackingStore(
     lun->DeviceId = 0;
     lun->MediaKind = 0;
     lun->RequestedDriveLetter = 0;
+    lun->CreateOperationId = 0;
     lun->State = WispDiskLunState::Empty;
-    return backingStore;
 }
 
 void HandleQueryVersion(_In_ const ControlRequest& controlRequest) noexcept {
@@ -169,9 +174,10 @@ void HandleQueryVersion(_In_ const ControlRequest& controlRequest) noexcept {
             request.CorrelationId
         ),
         .VersionMajor = 0,
-        .VersionMinor = 2,
+        .VersionMinor = 3,
         .Capabilities =
-            WISPDISK_CAP_CREATE_DELETE | WISPDISK_CAP_READ_WRITE | WISPDISK_CAP_REMOVABLE,
+            WISPDISK_CAP_CREATE_DELETE | WISPDISK_CAP_READ_WRITE | WISPDISK_CAP_REMOVABLE |
+            WISPDISK_CAP_OPERATION_RECOVERY,
         .MaximumDiskCount = kMaximumDiskCount,
     };
     RtlCopyMemory(controlRequest.payload, &response, sizeof(response));
@@ -300,6 +306,7 @@ void ProcessDeleteRequest(
     if (backingStore != nullptr) {
         StorPortFreePool(adapter, backingStore);
     }
+    FinalizeRemoval(adapter, selected);
 
     KdPrint(("WispDisk: deleted disk id=%lu\n", request.DeviceId));
     WriteDeleteResponse(controlRequest, request, STATUS_SUCCESS);

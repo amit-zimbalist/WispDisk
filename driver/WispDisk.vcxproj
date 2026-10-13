@@ -107,6 +107,7 @@
     <ClCompile Include="src\management\control_request.cpp" />
     <ClCompile Include="src\management\disk_operations.cpp" />
     <ClCompile Include="src\management\management.cpp" />
+    <ClCompile Include="src\management\operation_state.cpp" />
     <ClCompile Include="src\scsi\read_write.cpp" />
     <ClCompile Include="src\scsi\scsi.cpp" />
     <ClCompile Include="src\scsi\scsi_commands.cpp" />
@@ -119,6 +120,7 @@
     <ClInclude Include="src\management\control_request.h" />
     <ClInclude Include="src\management\disk_operations.h" />
     <ClInclude Include="src\management\management.h" />
+    <ClInclude Include="src\management\operation_state.h" />
     <ClInclude Include="src\scsi\read_write.h" />
     <ClInclude Include="src\scsi\scsi.h" />
     <ClInclude Include="src\scsi\scsi_commands.h" />

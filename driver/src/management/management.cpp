@@ -2,6 +2,7 @@
 
 #include "control_request.h"
 #include "disk_operations.h"
+#include "operation_state.h"
 #include "support/scoped_spin_lock.h"
 
 namespace wispdisk::management {
@@ -35,6 +36,13 @@ static WispDiskIoControlDisposition QueueManagementRequest(
         }
         KeClearEvent(&adapter->ManagementIdleEvent);
 
+        if ((operation == WispDiskControlCreateReserved || operation == WispDiskControlDeleteReserved) &&
+            !AcceptReservedOperation(adapter, controlRequest)) {
+            InterlockedExchange(&adapter->ManagementBusy, 0);
+            KeSetEvent(&adapter->ManagementIdleEvent, IO_NO_INCREMENT, FALSE);
+            return WispDiskIoControlDisposition::Complete;
+        }
+
         // The worker can run before StorPortQueueWorkItem returns. Publish pending
         // before handing it the SRB; on success only the worker may access it.
         controlRequest.control->ReturnCode = static_cast<ULONG>(STATUS_PENDING);
@@ -59,12 +67,16 @@ static WispDiskIoControlDisposition QueueManagementRequest(
             static_cast<ULONG>(operation),
             storStatus
         ));
-        WriteSimpleErrorResponse(
-            controlRequest,
-            operation,
-            STATUS_INSUFFICIENT_RESOURCES,
-            correlationId
-        );
+        if (operation == WispDiskControlCreateReserved || operation == WispDiskControlDeleteReserved) {
+            FailReservedOperation(adapter, controlRequest, STATUS_INSUFFICIENT_RESOURCES);
+        } else {
+            WriteSimpleErrorResponse(
+                controlRequest,
+                operation,
+                STATUS_INSUFFICIENT_RESOURCES,
+                correlationId
+            );
+        }
         return WispDiskIoControlDisposition::Complete;
     }
 
@@ -112,6 +124,22 @@ static WispDiskIoControlDisposition DispatchControlRequest(
     _In_ const ControlRequest& controlRequest
 ) noexcept {
     switch (controlRequest.control->ControlCode) {
+        case WispDiskControlReserveOperation:
+            HandleReserveOperation(adapter, controlRequest);
+            return WispDiskIoControlDisposition::Complete;
+        case WispDiskControlQueryOperation:
+            HandleQueryOperation(adapter, controlRequest);
+            return WispDiskIoControlDisposition::Complete;
+        case WispDiskControlListState:
+            HandleListState(adapter, controlRequest);
+            return WispDiskIoControlDisposition::Complete;
+        case WispDiskControlCreateReserved:
+        case WispDiskControlDeleteReserved: {
+            WISPDISK_REQUEST_HEADER header{};
+            const auto operation = static_cast<WISPDISK_CONTROL_CODE>(controlRequest.control->ControlCode);
+            RtlCopyMemory(&header, controlRequest.payload, min(controlRequest.control->Length, static_cast<ULONG>(sizeof(header))));
+            return QueueManagementRequest(adapter, controlRequest, operation, header.CorrelationId);
+        }
         case WispDiskControlQueryVersion:
             HandleQueryVersion(controlRequest);
             return WispDiskIoControlDisposition::Complete;
@@ -142,6 +170,10 @@ static void ProcessQueuedRequest(
     _In_ const ControlRequest& controlRequest
 ) noexcept {
     switch (controlRequest.control->ControlCode) {
+        case WispDiskControlCreateReserved:
+        case WispDiskControlDeleteReserved:
+            ProcessReservedOperation(adapter, controlRequest);
+            break;
         case WispDiskControlCreateDisk:
             ProcessCreateRequest(adapter, controlRequest);
             break;
@@ -196,7 +228,9 @@ VOID WispDiskManagementWorker(PVOID deviceExtension, PVOID context, PVOID worker
     const bool busChanged = controlRequest &&
         controlRequest.control->ReturnCode == static_cast<ULONG>(STATUS_SUCCESS) &&
         (controlRequest.control->ControlCode == WispDiskControlCreateDisk ||
-         controlRequest.control->ControlCode == WispDiskControlDeleteDisk);
+         controlRequest.control->ControlCode == WispDiskControlDeleteDisk ||
+         controlRequest.control->ControlCode == WispDiskControlCreateReserved ||
+         controlRequest.control->ControlCode == WispDiskControlDeleteReserved);
     if (adapter != nullptr && srb != nullptr) {
         StorPortNotification(RequestComplete, adapter, srb);
     }

@@ -127,6 +127,17 @@ ULONG WispDiskHwFindAdapter(
     KeInitializeSpinLock(&adapter->LunLock);
     KeInitializeEvent(&adapter->ManagementIdleEvent, NotificationEvent, TRUE);
     adapter->NextDeviceId = 1;
+    LARGE_INTEGER instanceTime{};
+    KeQuerySystemTimePrecise(&instanceTime);
+    static volatile LONG64 lastInstance = 0;
+    LONG64 previous;
+    LONG64 instance;
+    do {
+        previous = lastInstance;
+        instance = instanceTime.QuadPart > previous ? instanceTime.QuadPart : previous + 1;
+    } while (InterlockedCompareExchange64(&lastInstance, instance, previous) != previous);
+    adapter->AdapterInstance = static_cast<ULONGLONG>(instance);
+    adapter->NextOperationId = 1;
     for (ULONG index = 0; index < kMaximumDiskCount; ++index) {
         adapter->Luns[index].Lun = static_cast<UCHAR>(index);
         KeInitializeEvent(&adapter->Luns[index].NoActiveRequestsEvent, NotificationEvent, TRUE);

@@ -32,11 +32,24 @@ struct WISPDISK_LUN {
     USHORT RequestedDriveLetter;
     USHORT Reserved16;
     ULONGLONG SizeBytes;
+    ULONGLONG CreateOperationId;
     PUCHAR BackingStore;
     ULONG ActiveRequests;
     KEVENT NoActiveRequestsEvent;
 };
 using PWISPDISK_LUN = WISPDISK_LUN*;
+
+constexpr ULONG kMaximumOperationCount = 128;
+struct WISPDISK_OPERATION_RECORD {
+    ULONGLONG Id;
+    ULONG Mutation;
+    WISPDISK_OPERATION_STATE State;
+    NTSTATUS Result;
+    ULONG DeviceId;
+    UCHAR Lun;
+    WISPDISK_CREATE_REQUEST Create;
+    WISPDISK_DELETE_REQUEST Delete;
+};
 
 struct WISPDISK_ADAPTER_EXTENSION {
     ULONG Signature;
@@ -46,6 +59,9 @@ struct WISPDISK_ADAPTER_EXTENSION {
     KEVENT ManagementIdleEvent;
     PVOID ManagementWorker;
     ULONG NextDeviceId;
+    ULONGLONG AdapterInstance;
+    ULONGLONG NextOperationId;
+    WISPDISK_OPERATION_RECORD Operations[kMaximumOperationCount];
     ULONGLONG TotalAllocatedBytes;
     WISPDISK_LUN Luns[WISPDISK_MAXIMUM_DISK_COUNT];
 };

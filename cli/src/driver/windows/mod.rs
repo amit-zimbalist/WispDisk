@@ -1,49 +1,53 @@
 //! Windows add/delete orchestration. Platform details live in focused sibling modules.
 
 mod adapter;
+mod control_operation;
 mod disk;
 mod disk_interface_notification;
 mod install;
+mod inventory;
 mod recovery;
 mod storage;
 mod volume;
+mod volume_deletion;
 mod win32;
 
 use anyhow::{Context, Result, bail};
 
 use std::time::Duration;
 
-use windows_sys::Win32::{
-    Foundation::{GENERIC_READ, GENERIC_WRITE},
-    Storage::FileSystem::DeleteVolumeMountPointW,
-    System::Ioctl::{FSCTL_DISMOUNT_VOLUME, FSCTL_LOCK_VOLUME, FSCTL_UNLOCK_VOLUME},
-};
+use windows_sys::Win32::Foundation::GENERIC_READ;
 
 use crate::{
     args::{Command, DriveLetter, FileSystem, MediaKind},
-    protocol::{CAP_CREATE_DELETE, CAP_READ_WRITE, CreateResponse, DiskInfo},
+    protocol::{CAP_CREATE_DELETE, CAP_READ_WRITE, DiskState},
     timing,
 };
 
 use self::{
-    adapter::{Adapter, adapters, wait_for_adapter},
+    adapter::{Adapter, CreatedDisk, adapters, wait_for_adapter},
     disk::{
         ScsiLocation, physical_disk_address, verify_physical_disk_location, wait_for_physical_disk,
         wait_for_physical_disk_absent,
     },
     install::install_embedded_driver,
-    recovery::recovery_failed,
+    inventory::list_inventory,
+    recovery::{UnresolvedOutcome, recovery_failed},
     storage::initialize_and_format,
     volume::{
         drive_letter_in_use, ensure_drive_letter_available, get_volume_name, mount_point,
-        restore_mount_and_unlock, verify_mounted_drive, volume_control, volume_disk_number,
-        wait_for_drive_state,
+        verify_mounted_drive, volume_disk_number, wait_for_drive_state,
     },
-    win32::{last_os_error, open_device},
+    volume_deletion::VolumeDeletion,
+    win32::open_device,
 };
 
 const DEVICE_WAIT: Duration = Duration::from_secs(30);
 const RETRY_INTERVAL: Duration = Duration::from_millis(200);
+
+pub(super) fn is_unresolved(error: &anyhow::Error) -> bool {
+    recovery::is_unresolved(error)
+}
 
 pub(super) fn execute(command: &Command) -> Result<()> {
     match command {
@@ -54,6 +58,8 @@ pub(super) fn execute(command: &Command) -> Result<()> {
             file_system,
         } => add_disk(*letter, *media, *size_bytes, *file_system),
         Command::Delete { letter } => delete_disk(*letter),
+        Command::DeleteId { adapter, id } => delete_by_identity(*adapter, *id),
+        Command::List { json } => list_inventory(*json),
     }
 }
 
@@ -80,10 +86,12 @@ fn add_disk(
         bail!("loaded driver does not support removable-media disks");
     }
 
+    adapter.require_recovery()?;
     let created = adapter.create_disk(letter, media, size_bytes)?;
-    timing::mark("allocate and zero backing store");
+    timing::mark("create allocation confirmed");
 
     let result: Result<()> = (|| {
+        ensure_drive_letter_available(letter)?;
         let location = expected_location(&adapter, &created);
         let disk_number = wait_for_physical_disk(location, DEVICE_WAIT)?;
         timing::mark("wait for disk interface");
@@ -106,14 +114,27 @@ fn add_disk(
     })();
 
     if let Err(error) = result {
-        let rollback = adapter.delete_by_id(created.device_id);
+        let deadline = std::time::Instant::now() + DEVICE_WAIT;
+        let rollback = loop {
+            match delete_allocation(&adapter, created.adapter_instance, created.device_id) {
+                Err(error)
+                    if volume::is_lock_refusal(&error) && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(RETRY_INTERVAL);
+                }
+                result => break result,
+            }
+        };
         return match rollback {
             Ok(()) => Err(error.context(
                 "failed to initialize the new disk; the driver allocation was rolled back",
             )),
             Err(rollback_error) => Err(recovery_failed(
                 error,
-                "failed to initialize the new disk; driver rollback also failed",
+                format!(
+                    "failed to initialize device {} on adapter instance {}; driver rollback also failed",
+                    created.device_id, created.adapter_instance
+                ),
                 rollback_error,
             )),
         };
@@ -127,79 +148,141 @@ fn add_disk(
 }
 
 fn delete_disk(letter: DriveLetter) -> Result<()> {
-    let mount_point = mount_point(letter);
     if !drive_letter_in_use(letter) {
         bail!("drive {letter} is not mounted");
     }
-
-    let volume_name = get_volume_name(&mount_point)?;
+    let _name = get_volume_name(&mount_point(letter))?;
     let volume = open_device(
         &format!(r"\\.\{}:", char::from(letter.as_ascii())),
-        GENERIC_READ | GENERIC_WRITE,
+        GENERIC_READ,
     )
-    .context("open target volume")?;
-    let disk_number = volume_disk_number(&volume)?;
-    let address = physical_disk_address(disk_number)?;
-    let location = address;
-
+    .context("open target volume for identity")?;
+    let number = volume_disk_number(&volume)?;
+    let address = physical_disk_address(number)?;
+    drop(volume);
     let mut matched = None;
     for adapter in adapters() {
         if adapter.port_number != address.port {
             continue;
         }
-        let matches: Vec<DiskInfo> = adapter
-            .list_disks()?
-            .into_iter()
-            .filter(|disk| {
-                disk.path_id == address.path
-                    && disk.target_id == address.target
-                    && disk.lun == address.lun
-            })
-            .collect();
-        if matches.len() > 1 || (matches.len() == 1 && matched.is_some()) {
-            bail!("refusing to delete {letter}: multiple WispDisk LUNs claim its SCSI address");
+        adapter.require_recovery()?;
+        let state = adapter.state()?;
+        for entry in &state.disks[..state.disk_count as usize] {
+            if entry.disk.path_id == address.path
+                && entry.disk.target_id == address.target
+                && entry.disk.lun == address.lun
+            {
+                if matched.is_some() {
+                    bail!("multiple WispDisk LUNs claim drive {letter}");
+                }
+                matched = Some((
+                    adapter.port_number,
+                    state.adapter_instance,
+                    entry.disk.device_id,
+                ));
+            }
         }
-        if let Some(disk) = matches.first() {
-            matched = Some((adapter, *disk));
-        }
     }
-    let Some((adapter, disk)) = matched else {
-        bail!(
-            "refusing to delete {letter}: its PhysicalDrive{disk_number} address is not uniquely owned by WispDisk"
-        );
-    };
-
-    volume_control(&volume, FSCTL_LOCK_VOLUME, "lock target volume")?;
-    if let Err(error) = volume_control(&volume, FSCTL_DISMOUNT_VOLUME, "dismount target volume") {
-        let _ = volume_control(&volume, FSCTL_UNLOCK_VOLUME, "unlock target volume");
-        return Err(error);
-    }
-    if unsafe { DeleteVolumeMountPointW(mount_point.as_ptr()) } == 0 {
-        let error = last_os_error("remove drive-letter mount point");
-        let _ = volume_control(&volume, FSCTL_UNLOCK_VOLUME, "unlock target volume");
-        return Err(error);
-    }
-
-    if let Err(error) = adapter.delete_by_id(disk.device_id) {
-        let restore_error = restore_mount_and_unlock(&volume, &mount_point, &volume_name).err();
-        return match restore_error {
-            Some(restore) => Err(recovery_failed(
-                error,
-                format!("driver rejected deletion; restoring {letter} also failed"),
-                restore,
-            )),
-            None => Err(error.context(format!("driver rejected deletion; {letter} was restored"))),
-        };
-    }
-
-    drop(volume);
-    wait_for_drive_state(letter, false, DEVICE_WAIT)?;
-    wait_for_physical_disk_absent(disk_number, location, DEVICE_WAIT)?;
-    println!("deleted WispDisk {letter} (device id {})", disk.device_id);
+    let (_, instance, id) = matched.context("volume is not uniquely owned by WispDisk")?;
+    delete_by_identity(instance, id)?;
+    timing::measure("wait for drive-letter disappearance", || {
+        wait_for_drive_state(letter, false, DEVICE_WAIT)
+    })?;
     Ok(())
 }
 
-fn expected_location(adapter: &Adapter, created: &CreateResponse) -> ScsiLocation {
+fn delete_by_identity(instance: u64, id: u32) -> Result<()> {
+    let mut matched = None;
+    for adapter in adapters() {
+        adapter.require_recovery()?;
+        if adapter.state()?.adapter_instance == instance {
+            if matched.is_some() {
+                bail!("multiple adapters claim instance {instance}");
+            }
+            matched = Some(adapter);
+        }
+    }
+    let adapter =
+        matched.context("adapter instance is absent or stale; refresh /list before deletion")?;
+    delete_allocation(&adapter, instance, id)?;
+    println!("deleted WispDisk device {id} (adapter instance {instance})");
+    Ok(())
+}
+
+fn delete_allocation(adapter: &Adapter, instance: u64, id: u32) -> Result<()> {
+    let state = adapter.state()?;
+    if state.adapter_instance != instance {
+        bail!("adapter instance changed before deletion");
+    }
+    let entry = state.disks[..state.disk_count as usize]
+        .iter()
+        .find(|entry| entry.disk.device_id == id)
+        .context("device ID is absent; refresh /list")?;
+    if entry.state != 1 {
+        bail!("device {id} is already stopping; query inventory until removal completes");
+    }
+    let location = disk_location(adapter, entry);
+    let number = wait_for_physical_disk(location, DEVICE_WAIT)?;
+    timing::mark("resolve deletion identity");
+    let mut volumes = timing::measure("open target volumes", || {
+        VolumeDeletion::open(number, location)
+    })?;
+    let prepared = (|| {
+        timing::measure("lock target volumes", || volumes.lock())?;
+        timing::measure("dismount target volumes", || volumes.dismount())?;
+        timing::measure("remove volume mount points", || volumes.remove_mounts())
+    })();
+    if let Err(error) = prepared {
+        return match timing::measure("restore volume mount points", || volumes.restore()) {
+            Ok(()) => Err(error),
+            Err(restore) => Err(recovery_failed(
+                error,
+                "volume restoration also failed",
+                restore,
+            )),
+        };
+    }
+    if let Err(error) = adapter.delete_by_id(instance, id) {
+        // A transport failure is not a rejection. Restore only after positively
+        // establishing that the same allocation remains online.
+        let still_online = error.downcast_ref::<UnresolvedOutcome>().is_none()
+            && adapter.state().ok().is_some_and(|state| {
+                state.adapter_instance == instance
+                    && state.disks[..state.disk_count as usize]
+                        .iter()
+                        .any(|entry| entry.disk.device_id == id && entry.state == 1)
+            });
+        if still_online {
+            return match timing::measure("restore volume mount points", || volumes.restore()) {
+                Ok(()) => Err(error.context("deletion rejected; original mount points restored")),
+                Err(restore) => Err(recovery_failed(
+                    error,
+                    "mount restoration also failed",
+                    restore,
+                )),
+            };
+        }
+        return Err(error.context(format!(
+            "device {id} removal is not confirmed; inspect /list /json before retrying"
+        )));
+    }
+    drop(volumes);
+    timing::measure("wait for device disappearance", || {
+        wait_for_physical_disk_absent(number, location, DEVICE_WAIT)
+    }).with_context(|| format!("driver allocation for device {id} was removed, but Windows disappearance was not confirmed"))?;
+    Ok(())
+}
+
+fn disk_location(adapter: &Adapter, entry: &DiskState) -> ScsiLocation {
+    ScsiLocation {
+        port: adapter.port_number,
+        path: entry.disk.path_id,
+        target: entry.disk.target_id,
+        lun: entry.disk.lun,
+    }
+}
+
+fn expected_location(adapter: &Adapter, created: &CreatedDisk) -> ScsiLocation {
     ScsiLocation {
         port: adapter.port_number,
         path: created.path_id,

@@ -4,7 +4,7 @@ Class=SCSIAdapter
 ClassGuid={4D36E97B-E325-11CE-BFC1-08002BE10318}
 Provider=%ProviderName%
 CatalogFile=WispDisk.cat
-DriverVer=09/05/2026,0.2.0.0
+DriverVer=10/13/2026,0.3.0.1
 PnpLockdown=1
 
 [DestinationDirs]

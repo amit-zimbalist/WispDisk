@@ -103,26 +103,38 @@
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="src\adapter_context.cpp" />
     <ClCompile Include="src\driver.cpp" />
     <ClCompile Include="src\management\control_request.cpp" />
     <ClCompile Include="src\management\disk_operations.cpp" />
     <ClCompile Include="src\management\management.cpp" />
+    <ClCompile Include="src\management\management_controller.cpp" />
+    <ClCompile Include="src\management\diagnostics.cpp" />
+    <ClCompile Include="src\management\operation_state.cpp" />
     <ClCompile Include="src\scsi\read_write.cpp" />
     <ClCompile Include="src\scsi\scsi.cpp" />
     <ClCompile Include="src\scsi\scsi_commands.cpp" />
     <ClCompile Include="src\scsi\scsi_response.cpp" />
+    <ClCompile Include="src\storage\lun_store.cpp" />
+    <ClCompile Include="src\storage\lun_io_lease.cpp" />
     <ClCompile Include="src\support\scoped_spin_lock.cpp" />
     <ClCompile Include="src\support\stor_port_pool_allocation.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\adapter_context.h" />
     <ClInclude Include="src\driver.h" />
     <ClInclude Include="src\management\control_request.h" />
     <ClInclude Include="src\management\disk_operations.h" />
     <ClInclude Include="src\management\management.h" />
+    <ClInclude Include="src\management\management_controller.h" />
+    <ClInclude Include="src\management\operation_state.h" />
+    <ClInclude Include="src\management\diagnostics.h" />
     <ClInclude Include="src\scsi\read_write.h" />
     <ClInclude Include="src\scsi\scsi.h" />
     <ClInclude Include="src\scsi\scsi_commands.h" />
     <ClInclude Include="src\scsi\scsi_response.h" />
+    <ClInclude Include="src\storage\lun_store.h" />
+    <ClInclude Include="src\storage\lun_io_lease.h" />
     <ClInclude Include="src\support\scoped_spin_lock.h" />
     <ClInclude Include="src\support\stor_port_pool_allocation.h" />
     <ClInclude Include="..\shared\wispdisk_protocol.h" />

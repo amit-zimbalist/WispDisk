@@ -59,6 +59,64 @@ variants, Win32 error codes remain inspectable, and the CLI prints the complete
 context chain. If recovery also fails, its error is retained alongside the
 primary failure rather than replacing or flattening it.
 
+Protocol responses expose validation methods for their specific meaning.
+`TryFrom<OperationResponse>` constructs `CreatedDisk` or a reserved
+`OperationHandle` only after validating the corresponding response. Request
+identity matching stays in recovery, and failed create conversion retains the
+original unresolved-operation handle.
+
+### Miniport adapter context
+
+The adapter components are non-owning views over StorPort's plain extension
+storage. `AdapterContext` coordinates initialization, SRB dispatch, stop/restart,
+and explicit teardown. Its `Management()` and `Disks()` accessors return
+lightweight views backed by the existing extension storage.
+
+| Component | Public API and responsibility |
+| --- | --- |
+| `adapter_context.h/.cpp` | `Initialize`, `SetStopping`, `StartIo`, `ReleaseResources`: lifecycle and dispatch. |
+| `management/management_controller.h/.cpp` | `Initialize`, `Shutdown`, `ReserveOperation`, `QueryOperation`, `SubmitCreate`, `SubmitDelete`, `SnapshotState`: management lifecycle, admission, replay, worker handoff, retained outcomes, and completion. `ProcessWorkItem` is the StorPort worker entry point. |
+| `storage/lun_store.h/.cpp` | `AcquireIo`, `SnapshotOnlineDisks`, `SnapshotOnlineLuns`: leased I/O and online inventory. Mutation and draining primitives are private to management coordination. |
+| `storage/lun_io_lease.h/.cpp` | `operator bool`, `view`: an active I/O reference released by the destructor. The view is usable only while the lease is alive. |
+| `management/diagnostics.h/.cpp` | Namespace functions for bounded tracing and Debug-only diagnostic controls. |
+
+Protocol handlers validate/decode wire requests before calling the controller.
+The borrowed `ControlRequest` view is constructed through `FromSrb`, which
+returns an empty view for a null SRB or invalid control envelope. Its typed
+`ReadRequest` and `WriteResponse` methods use the shared `WireStructure` concept
+to require trivially copyable, standard-layout types and derive their wire sizes.
+Request decoding preserves the common header on validation errors; response
+writing checks capacity before copying. `WriteError` preserves the original
+status when a buffer cannot fit an error header. `PrepareCompletion` updates
+response metadata; SRB completion and ownership transfer remain explicit.
+Operation-specific validation and response-capacity checks before mutations stay
+in the handlers, along with the short-buffer fallback for simple error responses.
+Reservation and query results are copied values; table pointers and locking
+views do not escape through the public API. The controller admits management
+work, binds immutable replay parameters, and publishes Pending under one
+`LunLock` acquisition. Its inventory snapshot reads both LUNs and pending
+operations under that same lock. Every `...Locked` helper accepts a live guard
+and asserts that it protects the correct adapter lock in Debug builds. The
+extension storage documents which fields use that lock and which lifecycle
+updates run outside it; blocking worker and teardown APIs declare PASSIVE_LEVEL
+requirements through SAL. Required internal output arguments use references.
+
+Pool allocation, I/O draining, SRB completion, and bus notifications run outside
+the spin lock. After backing-store release, the controller finalizes LUN removal
+and marks its create record Deleted together under the lock. Reserved create
+results are published with the LUN's creating-operation ID under the lock.
+Stop/restart callbacks use atomic flag updates. The controller initializes its
+management state and worker through `Initialize`. Its `Shutdown` closes admission
+under the lock, waits for the final worker access, drains/releases LUNs, and frees
+the worker. `AdapterContext` delegates to these lifecycle methods and invalidates
+the adapter signature after shutdown returns; it needs no friendship with the
+controller. Waiting and worker-release helpers remain private.
+
+Driver C++ formatting is defined by the repository's `.clang-format`, including
+the layout of WDK annotations. Diagnostic control codes and injection modes have
+shared names in `management/diagnostics.h`; their numeric wire values stay fixed.
+`ControlRequest::ioControl` names the borrowed SRB control header.
+
 ## Add flow
 
 1. Parse and validate `/add`, media kind, drive letter, byte size, and selected
@@ -157,6 +215,51 @@ The Rust definitions in `cli/src/protocol.rs` mirror
 `shared/wispdisk_protocol.h`; compile-time size checks protect the ABI on both
 sides. Future changes append fields and increase `StructSize`; they do not
 silently reinterpret version 1 layouts.
+
+### Recoverable management operations
+
+`WISPDISK_CAP_OPERATION_RECOVERY` advertises additional operations without
+changing the original v1 layouts. ReserveOperation allocates a bookkeeping
+handle `(AdapterInstance, OperationId)` for create or delete; it does not
+allocate a LUN. CreateReserved/DeleteReserved bind immutable parameters and
+publish Pending under the same lock used for management admission. Replaying
+an accepted handle returns its state and result, never another mutation.
+QueryOperation returns Reserved, Pending, Succeeded, Failed, or Deleted. Deleted
+means a successful create's allocation has since been removed and cannot be
+resurrected by replay.
+
+The fixed 128-record table never evicts pending mutations or successful creates
+with live allocations. Empty slots are used first, then the oldest unused
+reservation or terminal record is reclaimed. An unknown/expired handle is
+rejected, including for mutation; operation IDs never wrap or become valid
+again within an adapter instance. AdapterInstance changes on adapter creation.
+These records are volatile and do not promise persistence across reboot or
+checkpoint restore. Transport recovery must retain the original handle.
+
+ListState exposes online and stopping LUNs, their creating operation IDs,
+allocated bytes, and pending mutations. Stopping LUNs remain visible and counted
+until backing memory has actually been freed. The original ListDisks remains
+an online-only inventory for compatibility. A successful delete is published
+only after backing-store release; Windows PnP disappearance is a separate CLI
+completion condition.
+
+Management SRBs are pending before work is queued. After successful queueing,
+only the worker accesses the SRB. It finalizes the response, completes the SRB,
+and notifies the bus using retained adapter context. Its idle signal follows all
+completion and notification accesses and is protected by LunLock. Teardown
+closes admission under that lock and waits until the worker can be freed.
+
+The CLI queries the original reserved handle after a transport failure. Reserved
+can be submitted again, Pending is polled, Succeeded returns the original disk,
+and Failed is a confirmed rejection. Unknown outcomes retain recovery identity
+and never cause another create. Initialization rollback uses the ordinary safe
+deletion path, including volume locks, driver reconciliation, and PnP checks.
+
+Deletion by adapter instance/device ID enumerates volume GUIDs and mount points,
+matches them by physical disk and verified SCSI location, and locks every target
+volume before dismount/removal. After rejection it restores mounts only when
+inventory confirms that the same allocation remains online. An unresolved
+deletion is reported for subsequent inventory-based recovery.
 
 ## Milestones
 

@@ -18,13 +18,11 @@ void WriteDeviceIdHex(_Out_writes_(8) UCHAR* destination, _In_ ULONG deviceId) n
     _Inout_ PSCSI_REQUEST_BLOCK srb,
     _In_ UCHAR senseKey,
     _In_ UCHAR additionalSenseCode,
-    _In_ UCHAR additionalSenseQualifier = 0
-) noexcept;
+    _In_ UCHAR additionalSenseQualifier = 0) noexcept;
 
 [[nodiscard]] UCHAR CopyScsiResponse(
     _Inout_ PSCSI_REQUEST_BLOCK srb,
     _In_reads_bytes_(responseLength) const void* response,
-    _In_ ULONG responseLength
-) noexcept;
+    _In_ ULONG responseLength) noexcept;
 
 } // namespace wispdisk::scsi

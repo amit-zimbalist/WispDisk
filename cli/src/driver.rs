@@ -24,6 +24,16 @@ pub fn execute(command: &Command) -> Result<()> {
     }
 }
 
+pub fn error_exit_code(error: &anyhow::Error) -> u8 {
+    #[cfg(windows)]
+    if windows::is_unresolved(error) {
+        return 3;
+    }
+    #[cfg(not(windows))]
+    let _ = error;
+    1
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub enum DriverError {
     PackageNotEmbedded,

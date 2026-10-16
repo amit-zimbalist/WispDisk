@@ -65,7 +65,7 @@ pub(super) fn wait_for_physical_disk(location: ScsiLocation, timeout: Duration) 
     }
 }
 
-fn find_physical_disk(expected: ScsiLocation) -> Result<Option<u32>> {
+pub(super) fn find_physical_disk(expected: ScsiLocation) -> Result<Option<u32>> {
     let raw = unsafe {
         SetupDiGetClassDevsW(
             &GUID_DEVINTERFACE_DISK,

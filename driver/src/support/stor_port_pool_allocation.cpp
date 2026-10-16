@@ -5,12 +5,10 @@ namespace wispdisk::support {
 StorPortPoolAllocation::StorPortPoolAllocation(
     _In_ PVOID deviceExtension,
     _In_ ULONG size,
-    _In_ ULONG tag
-) noexcept
+    _In_ ULONG tag) noexcept
     : deviceExtension_{deviceExtension} {
     PVOID allocation = nullptr;
-    if (StorPortAllocatePool(deviceExtension_, size, tag, &allocation) ==
-        STOR_STATUS_SUCCESS) {
+    if (StorPortAllocatePool(deviceExtension_, size, tag, &allocation) == STOR_STATUS_SUCCESS) {
         allocation_ = allocation;
     }
 }

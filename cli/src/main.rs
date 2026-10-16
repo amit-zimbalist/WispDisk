@@ -31,7 +31,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("error: {error:#}");
-            ExitCode::FAILURE
+            ExitCode::from(driver::error_exit_code(&error))
         }
     }
 }

@@ -24,6 +24,9 @@ enum class WispDiskLunState : LONG {
 };
 
 struct WISPDISK_LUN {
+    // Runtime state changes use the adapter's LunLock. A live I/O lease permits
+    // access to immutable online metadata and backing memory outside the lock.
+    // Serialized management retains stopping LUNs while draining active I/O.
     WispDiskLunState State;
     ULONG DeviceId;
     UCHAR Lun;
@@ -32,22 +35,62 @@ struct WISPDISK_LUN {
     USHORT RequestedDriveLetter;
     USHORT Reserved16;
     ULONGLONG SizeBytes;
+    ULONGLONG CreateOperationId;
     PUCHAR BackingStore;
     ULONG ActiveRequests;
     KEVENT NoActiveRequestsEvent;
 };
 using PWISPDISK_LUN = WISPDISK_LUN*;
 
+constexpr ULONG kMaximumOperationCount = 128;
+struct WISPDISK_OPERATION_RECORD {
+    ULONGLONG Id;
+    ULONG Mutation;
+    WISPDISK_OPERATION_STATE State;
+    NTSTATUS Result;
+    ULONG DeviceId;
+    UCHAR Lun;
+    WISPDISK_CREATE_REQUEST Create;
+    WISPDISK_DELETE_REQUEST Delete;
+};
+
 struct WISPDISK_ADAPTER_EXTENSION {
     ULONG Signature;
+    // Serializes admission/idle publication, operation records, LUN state,
+    // allocation accounting, and Debug diagnostic state. Initialization is
+    // exclusive; allocation, I/O draining, completion, and notification run
+    // outside this lock.
     KSPIN_LOCK LunLock;
+    // Stop/restart may update this atomically at DIRQL without LunLock.
+    // Shutdown also holds LunLock to serialize closing with request admission.
     volatile LONG AdapterStopping;
+    // Busy and idle-event changes are coordinated together under LunLock.
     volatile LONG ManagementBusy;
     KEVENT ManagementIdleEvent;
+    // Created before requests are admitted; freed after admission is closed
+    // and the final worker access has finished.
     PVOID ManagementWorker;
     ULONG NextDeviceId;
+    ULONGLONG AdapterInstance; // Immutable from initialization until teardown.
+    ULONGLONG NextOperationId;
+    WISPDISK_OPERATION_RECORD Operations[kMaximumOperationCount];
     ULONGLONG TotalAllocatedBytes;
     WISPDISK_LUN Luns[WISPDISK_MAXIMUM_DISK_COUNT];
+#if DBG
+    ULONG TraceEnabled;
+    ULONG FaultMode;
+    ULONG FaultRemaining;
+    ULONGLONG TraceSequence;
+    struct TraceEntry {
+        ULONGLONG Sequence;
+        ULONGLONG OperationId;
+        LONGLONG Timestamp;
+        ULONG DeviceId;
+        ULONG Phase;
+        NTSTATUS Status;
+        ULONG SrbStatus;
+    } Trace[128];
+#endif
 };
 using PWISPDISK_ADAPTER_EXTENSION = WISPDISK_ADAPTER_EXTENSION*;
 

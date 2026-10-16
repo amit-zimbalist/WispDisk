@@ -28,11 +28,20 @@
     <Filter Include="Header Files\Support">
       <UniqueIdentifier>{D06BDA6A-7192-4359-84A5-7B9CB6D45594}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\Storage">
+      <UniqueIdentifier>{845C95DA-2D84-480D-B84D-89EC0158B934}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Storage">
+      <UniqueIdentifier>{DF748058-C543-449A-81C6-7B71B3CE04B8}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Property Sheets">
       <UniqueIdentifier>{81B8E894-5E1F-4FD8-B955-4CD3B11AA7E9}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="src\adapter_context.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\driver.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -57,6 +66,21 @@
     <ClCompile Include="src\scsi\scsi_response.cpp">
       <Filter>Source Files\SCSI</Filter>
     </ClCompile>
+    <ClCompile Include="src\management\management_controller.cpp">
+      <Filter>Source Files\Management</Filter>
+    </ClCompile>
+    <ClCompile Include="src\management\diagnostics.cpp">
+      <Filter>Source Files\Management</Filter>
+    </ClCompile>
+    <ClCompile Include="src\management\operation_state.cpp">
+      <Filter>Source Files\Management</Filter>
+    </ClCompile>
+    <ClCompile Include="src\storage\lun_store.cpp">
+      <Filter>Source Files\Storage</Filter>
+    </ClCompile>
+    <ClCompile Include="src\storage\lun_io_lease.cpp">
+      <Filter>Source Files\Storage</Filter>
+    </ClCompile>
     <ClCompile Include="src\support\scoped_spin_lock.cpp">
       <Filter>Source Files\Support</Filter>
     </ClCompile>
@@ -65,6 +89,9 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\adapter_context.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="src\driver.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -88,6 +115,21 @@
     </ClInclude>
     <ClInclude Include="src\scsi\scsi_response.h">
       <Filter>Header Files\SCSI</Filter>
+    </ClInclude>
+    <ClInclude Include="src\management\management_controller.h">
+      <Filter>Header Files\Management</Filter>
+    </ClInclude>
+    <ClInclude Include="src\management\diagnostics.h">
+      <Filter>Header Files\Management</Filter>
+    </ClInclude>
+    <ClInclude Include="src\management\operation_state.h">
+      <Filter>Header Files\Management</Filter>
+    </ClInclude>
+    <ClInclude Include="src\storage\lun_store.h">
+      <Filter>Header Files\Storage</Filter>
+    </ClInclude>
+    <ClInclude Include="src\storage\lun_io_lease.h">
+      <Filter>Header Files\Storage</Filter>
     </ClInclude>
     <ClInclude Include="src\support\scoped_spin_lock.h">
       <Filter>Header Files\Support</Filter>

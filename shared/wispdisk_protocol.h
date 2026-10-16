@@ -10,12 +10,18 @@
 #define WISPDISK_CAP_CREATE_DELETE 0x00000001UL
 #define WISPDISK_CAP_READ_WRITE 0x00000002UL
 #define WISPDISK_CAP_REMOVABLE 0x00000004UL
+#define WISPDISK_CAP_OPERATION_RECOVERY 0x00000008UL
 
 typedef enum _WISPDISK_CONTROL_CODE {
     WispDiskControlQueryVersion = 0x800,
     WispDiskControlCreateDisk = 0x801,
     WispDiskControlDeleteDisk = 0x802,
     WispDiskControlListDisks = 0x803,
+    WispDiskControlReserveOperation = 0x804,
+    WispDiskControlQueryOperation = 0x805,
+    WispDiskControlCreateReserved = 0x806,
+    WispDiskControlDeleteReserved = 0x807,
+    WispDiskControlListState = 0x808,
 } WISPDISK_CONTROL_CODE;
 
 typedef enum _WISPDISK_MEDIA_KIND {
@@ -92,6 +98,74 @@ typedef struct _WISPDISK_LIST_RESPONSE {
     WISPDISK_DISK_INFO Disks[WISPDISK_MAXIMUM_DISK_COUNT];
 } WISPDISK_LIST_RESPONSE, *PWISPDISK_LIST_RESPONSE;
 
+// New operations retain the v1 header; existing message layouts remain intact.
+typedef enum _WISPDISK_OPERATION_STATE {
+    WispDiskOperationReserved = 1,
+    WispDiskOperationPending = 2,
+    WispDiskOperationSucceeded = 3,
+    WispDiskOperationFailed = 4,
+    WispDiskOperationDeleted = 5,
+} WISPDISK_OPERATION_STATE;
+
+typedef struct _WISPDISK_RESERVE_REQUEST {
+    WISPDISK_REQUEST_HEADER Header;
+    ULONG Mutation;
+    ULONG Reserved;
+} WISPDISK_RESERVE_REQUEST;
+
+typedef struct _WISPDISK_OPERATION_REQUEST {
+    WISPDISK_REQUEST_HEADER Header;
+    ULONGLONG AdapterInstance;
+    ULONGLONG OperationId;
+} WISPDISK_OPERATION_REQUEST;
+
+typedef struct _WISPDISK_RESERVED_CREATE_REQUEST {
+    WISPDISK_OPERATION_REQUEST Operation;
+    ULONGLONG SizeBytes;
+    ULONG LogicalSectorSize;
+    ULONG MediaKind;
+    USHORT RequestedDriveLetter;
+    USHORT Reserved16;
+    ULONG Reserved32;
+} WISPDISK_RESERVED_CREATE_REQUEST;
+
+typedef struct _WISPDISK_RESERVED_DELETE_REQUEST {
+    WISPDISK_OPERATION_REQUEST Operation;
+    ULONG DeviceId;
+    ULONG Reserved;
+} WISPDISK_RESERVED_DELETE_REQUEST;
+
+typedef struct _WISPDISK_OPERATION_RESPONSE {
+    WISPDISK_RESPONSE_HEADER Header;
+    ULONGLONG AdapterInstance;
+    ULONGLONG OperationId;
+    ULONG Mutation;
+    ULONG State;
+    LONG ResultStatus;
+    ULONG DeviceId;
+    UCHAR PathId;
+    UCHAR TargetId;
+    UCHAR Lun;
+    UCHAR Reserved8;
+    ULONG Reserved32;
+} WISPDISK_OPERATION_RESPONSE;
+
+typedef struct _WISPDISK_DISK_STATE {
+    WISPDISK_DISK_INFO Disk;
+    ULONGLONG CreateOperationId;
+    ULONG State; // 1=online, 2=stopping (still owns backing memory)
+    ULONG Reserved;
+} WISPDISK_DISK_STATE;
+
+typedef struct _WISPDISK_STATE_RESPONSE {
+    WISPDISK_RESPONSE_HEADER Header;
+    ULONGLONG AdapterInstance;
+    ULONGLONG AllocatedBytes;
+    ULONG DiskCount;
+    ULONG PendingOperations;
+    WISPDISK_DISK_STATE Disks[WISPDISK_MAXIMUM_DISK_COUNT];
+} WISPDISK_STATE_RESPONSE;
+
 #if defined(__cplusplus)
 static_assert(sizeof(WISPDISK_REQUEST_HEADER) == 24, "protocol ABI changed");
 static_assert(sizeof(WISPDISK_RESPONSE_HEADER) == 24, "protocol ABI changed");
@@ -101,4 +175,11 @@ static_assert(sizeof(WISPDISK_CREATE_RESPONSE) == 32, "protocol ABI changed");
 static_assert(sizeof(WISPDISK_DELETE_REQUEST) == 32, "protocol ABI changed");
 static_assert(sizeof(WISPDISK_DISK_INFO) == 32, "protocol ABI changed");
 static_assert(sizeof(WISPDISK_LIST_RESPONSE) == 544, "protocol ABI changed");
+static_assert(sizeof(WISPDISK_RESERVE_REQUEST) == 32, "protocol ABI changed");
+static_assert(sizeof(WISPDISK_OPERATION_REQUEST) == 40, "protocol ABI changed");
+static_assert(sizeof(WISPDISK_RESERVED_CREATE_REQUEST) == 64, "protocol ABI changed");
+static_assert(sizeof(WISPDISK_RESERVED_DELETE_REQUEST) == 48, "protocol ABI changed");
+static_assert(sizeof(WISPDISK_OPERATION_RESPONSE) == 64, "protocol ABI changed");
+static_assert(sizeof(WISPDISK_DISK_STATE) == 48, "protocol ABI changed");
+static_assert(sizeof(WISPDISK_STATE_RESPONSE) == 816, "protocol ABI changed");
 #endif

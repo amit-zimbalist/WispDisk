@@ -27,6 +27,30 @@ These guidelines apply to `cli/` in addition to the shared root
   that knows the expected identity.
 - Preserve recovery information when validation or conversion fails.
 
+### Fallible conversion example
+
+This fictional type accepts only valid batch sizes. Validation belongs in
+`TryFrom` because conversion can fail.
+
+```rust
+struct BatchSize(u32);
+
+impl TryFrom<u32> for BatchSize {
+    type Error = &'static str;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        if value == 0 || value > 128 {
+            return Err("batch size must be between 1 and 128");
+        }
+
+        Ok(Self(value))
+    }
+}
+```
+
+The static error string keeps this small example self-contained. Use typed
+errors or `anyhow` with context as appropriate in application code.
+
 ## Error handling
 
 - Use `anyhow::Result` and `Context` for CLI orchestration to keep error

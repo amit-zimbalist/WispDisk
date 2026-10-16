@@ -33,6 +33,70 @@ These guidelines apply to `driver/` in addition to the shared root
   Put substantial behavior in the component responsible for it.
 - Preserve callback role declarations and SAL annotations.
 
+### Direct initialization example
+
+The following fictional type illustrates initializing known fields together.
+Keep designated initializers in member declaration order.
+
+```cpp
+struct BufferOptions {
+    ULONG capacityBytes{};
+    ULONG alignmentBytes{};
+    bool zeroInitialize{};
+};
+
+const BufferOptions options{
+    .capacityBytes = 4096,
+    .alignmentBytes = 64,
+    .zeroInitialize = true,
+};
+```
+
+### RAII example
+
+This fictional guard owns a scoped lock acquisition, not the underlying lock.
+The lock must already be initialized and outlive the guard. Callers must meet
+the Windows API's IRQL requirements.
+
+```cpp
+class ScopedQueueLock final {
+public:
+    explicit ScopedQueueLock(KSPIN_LOCK& lock) noexcept
+        : lock_{lock} {
+        KeAcquireSpinLock(&lock_, &previousIrql_);
+    }
+
+    ~ScopedQueueLock() noexcept {
+        KeReleaseSpinLock(&lock_, previousIrql_);
+    }
+
+    ScopedQueueLock(const ScopedQueueLock&) = delete;
+    ScopedQueueLock& operator=(const ScopedQueueLock&) = delete;
+    ScopedQueueLock(ScopedQueueLock&&) = delete;
+    ScopedQueueLock& operator=(ScopedQueueLock&&) = delete;
+
+private:
+    KSPIN_LOCK& lock_;
+    KIRQL previousIrql_{};
+};
+```
+
+Keep the acquisition's lifetime narrow with a named helper:
+
+```cpp
+void IncrementPending(KSPIN_LOCK& lock, ULONG& pending) noexcept {
+    ScopedQueueLock guard{lock};
+    ++pending;
+} // Automatically releases the lock and restores the previous IRQL.
+```
+
+The same lock must protect all concurrent accesses to `pending`. Keep work
+inside the helper bounded and nonblocking.
+
+Use RAII when an object owns a resource or scoped obligation. Prevent copies
+that would duplicate cleanup. A borrowed view does not own the underlying
+resource and must not tear it down when destroyed.
+
 ## Kernel constraints and diagnostics
 
 - Keep modern C++ choices compatible with kernel execution requirements.

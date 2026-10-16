@@ -35,6 +35,8 @@ the C++ driver.
 - Use RAII in C++ and ownership with `Drop` in Rust for resources that
   have a well-defined owner and reliable cleanup operation.
 - Keep resource wrappers small, focused, and reusable.
+- Use RAII for owned resources or scoped obligations. Keep their lifetimes
+  narrow and prevent copies that would duplicate cleanup.
 - Distinguish owning objects from borrowed views. A borrowed view must
   not release or tear down the resource it references.
 - Destruction should follow the lifetime of the owned resource.

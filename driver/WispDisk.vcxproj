@@ -105,6 +105,7 @@
   <ItemGroup>
     <ClCompile Include="src\adapter_context.cpp" />
     <ClCompile Include="src\driver.cpp" />
+    <ClCompile Include="src\logging.cpp" />
     <ClCompile Include="src\management\control_request.cpp" />
     <ClCompile Include="src\management\disk_operations.cpp" />
     <ClCompile Include="src\management\management.cpp" />
@@ -123,6 +124,7 @@
   <ItemGroup>
     <ClInclude Include="src\adapter_context.h" />
     <ClInclude Include="src\driver.h" />
+    <ClInclude Include="src\logging.h" />
     <ClInclude Include="src\management\control_request.h" />
     <ClInclude Include="src\management\disk_operations.h" />
     <ClInclude Include="src\management\management.h" />

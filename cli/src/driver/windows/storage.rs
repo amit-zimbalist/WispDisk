@@ -3,14 +3,12 @@
 use anyhow::{Context, Result, anyhow, bail, ensure};
 
 use std::{thread, time::Instant};
+use tracing::info;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use wmi::WMIConnection;
 
-use crate::{
-    args::{DriveLetter, FileSystem, MediaKind},
-    timing,
-};
+use crate::args::{DriveLetter, FileSystem, MediaKind};
 
 use super::{
     DEVICE_WAIT, RETRY_INTERVAL,
@@ -38,11 +36,11 @@ pub(super) fn initialize_and_format(
     let letter = char::from(letter.as_ascii()).to_ascii_uppercase();
     let label = volume_label(file_system, device_id);
 
+    info!(disk_number, "Connect to Storage WMI");
     let storage = StorageWmi::connect()?;
-    timing::mark("connect to Storage WMI");
 
+    info!(disk_number, "Query new disk");
     let disk = storage.get_disk(disk_number)?;
-    timing::mark("query new disk");
 
     if disk.is_system || disk.is_boot {
         bail!("refusing to initialize a boot or system disk");
@@ -57,27 +55,26 @@ pub(super) fn initialize_and_format(
     }
 
     if disk.is_offline {
+        info!(disk_number, "Bring disk online");
         storage.online_disk(&disk)?;
-        timing::mark("bring disk online");
     }
 
     if disk.is_read_only {
+        info!(disk_number, "Make disk writable");
         storage.set_disk_read_only(&disk, false)?;
-        timing::mark("make disk writable");
     }
 
     let (partition, drive_letter_assigned) = match disk.partition_style {
         PARTITION_STYLE_RAW => {
+            info!(disk_number, "Initialize MBR");
             storage.initialize_mbr(&disk)?;
-            timing::mark("initialize MBR");
+            info!(disk_number, %letter, "Create partition and assign drive letter");
             let partition = storage.create_max_partition(&disk, letter, file_system)?;
-            timing::mark("create partition and assign drive letter");
             (partition, true)
         }
         PARTITION_STYLE_MBR if media == MediaKind::Removable => {
-            let prepared = storage.get_or_create_removable_partition(&disk, letter, file_system)?;
-            timing::mark("prepare removable partition");
-            prepared
+            info!(disk_number, "Prepare removable partition");
+            storage.get_or_create_removable_partition(&disk, letter, file_system)?
         }
         style => {
             bail!(
@@ -88,18 +85,19 @@ pub(super) fn initialize_and_format(
     };
 
     if !drive_letter_assigned {
+        info!(disk_number, %letter, "Assign drive letter");
         storage.assign_drive_letter(&partition, letter)?;
-        timing::mark("assign drive letter");
     }
 
+    info!(%letter, "Wait for volume");
     let volume = storage.wait_for_volume(letter)?;
-    timing::mark("wait for volume");
 
     // The WMI calls above can take long enough for a PhysicalDrive number to be
     // reused. Revalidate the stable SCSI address immediately before formatting.
+    info!(disk_number, "Revalidate disk identity before format");
     verify_physical_disk_location(disk_number, expected_location)?;
-    timing::mark("revalidate disk identity before format");
 
+    info!(disk_number, %letter, %file_system, "Quick-format volume");
     storage.format_volume(
         &volume,
         &label,
@@ -107,7 +105,7 @@ pub(super) fn initialize_and_format(
         true, // force
         file_system,
     )?;
-    timing::mark(&format!("quick-format {file_system}"));
+    info!(disk_number, %letter, %file_system, "Volume formatted");
 
     Ok(())
 }

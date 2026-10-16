@@ -1,4 +1,5 @@
 #include "lun_store.h"
+#include "logging.h"
 #include "support/stor_port_pool_allocation.h"
 
 namespace wispdisk::storage {
@@ -129,7 +130,7 @@ NTSTATUS LunStore::CreateDisk(const WISPDISK_CREATE_REQUEST& request, ULONG& dev
     ULONG selected = kMaximumDiskCount;
     NTSTATUS status = SelectAvailableLun(request.SizeBytes, selected);
     if (!NT_SUCCESS(status)) {
-        KdPrint(("WispDisk: create rejected, status=0x%08lX\n", status));
+        WARN("CreateRejected", .AdapterInstance = extension_.AdapterInstance, .Status = status);
         return status;
     }
     support::StorPortPoolAllocation allocation{
@@ -137,21 +138,25 @@ NTSTATUS LunStore::CreateDisk(const WISPDISK_CREATE_REQUEST& request, ULONG& dev
         static_cast<ULONG>(request.SizeBytes),
         kBackingStoreTag};
     if (!allocation) {
-        KdPrint(("WispDisk: backing-store allocation failed, size=%I64u\n", request.SizeBytes));
+        ERROR(
+            "BackingAllocationFailed",
+            .AdapterInstance = extension_.AdapterInstance,
+            .Status = STATUS_INSUFFICIENT_RESOURCES,
+            .SizeBytes = request.SizeBytes);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
     RtlZeroMemory(allocation.get(), static_cast<SIZE_T>(request.SizeBytes));
     status = CommitNewLun(request, selected, allocation, deviceId);
     if (!NT_SUCCESS(status)) {
-        KdPrint(("WispDisk: create commit failed, status=0x%08lX\n", status));
+        WARN("CreateCommitFailed", .AdapterInstance = extension_.AdapterInstance, .Status = status);
         return status;
     }
     lun = static_cast<UCHAR>(selected);
-    KdPrint(
-        ("WispDisk: created disk id=%lu lun=%lu size=%I64u\n",
-         deviceId,
-         selected,
-         request.SizeBytes));
+    INFO(
+        "DiskCreated",
+        .AdapterInstance = extension_.AdapterInstance,
+        .DeviceId = deviceId,
+        .SizeBytes = request.SizeBytes);
     return STATUS_SUCCESS;
 }
 
@@ -197,7 +202,15 @@ static void WaitForLunIo(WISPDISK_LUN& lun) noexcept {
 
 _Use_decl_annotations_
 void LunStore::DrainAndFreeBacking(WISPDISK_LUN& lun, ULONG deviceId) const noexcept {
+    DEBUG(
+        "DiskIoDrainStarted",
+        .AdapterInstance = extension_.AdapterInstance,
+        .DeviceId = deviceId);
     WaitForLunIo(lun);
+    DEBUG(
+        "DiskIoDrainCompleted",
+        .AdapterInstance = extension_.AdapterInstance,
+        .DeviceId = deviceId);
     auto* backing = DetachBackingStore(lun, deviceId);
     if (backing != nullptr) {
         StorPortFreePool(&extension_, backing);

@@ -106,7 +106,8 @@ resource and must not tear it down when destroyed.
   locks across allocation, waiting, I/O draining, request completion,
   or bus notifications.
 - Add useful diagnostics at important lifecycle, management, and failure
-  points using the existing diagnostic helpers, `KdPrint`, or `DbgPrint`.
+  points using the existing diagnostic helpers or the logging macros
+  (`INFO`, `WARN`, `ERROR`, and `DEBUG`).
 - Keep diagnostics bounded and low volume. Avoid per-I/O logging in hot
   paths.
 

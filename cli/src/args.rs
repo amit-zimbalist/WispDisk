@@ -61,13 +61,9 @@ pub struct Cli {
     #[arg(long = "fs", value_name = "FAT|FAT32|NTFS")]
     file_system: Option<FileSystem>,
 
-    /// Validate and print the request without touching the driver.
-    #[arg(long, hide = true)]
-    pub dry_run: bool,
-
-    /// Print elapsed time for each driver and storage-provisioning phase.
-    #[arg(long, hide = true)]
-    pub timings: bool,
+    /// Write CLI and driver diagnostics to stdout (error, warn, info, debug, trace).
+    #[arg(long, num_args = 0..=1, default_missing_value = "info", value_name = "LEVEL", conflicts_with = "json")]
+    pub log: Option<tracing::level_filters::LevelFilter>,
 }
 
 impl Cli {
@@ -374,8 +370,8 @@ fn normalize_one(argument: OsString) -> OsString {
         "letter" => "letter",
         "size" => "size",
         "fs" => "fs",
-        "dry-run" => "dry-run",
-        "timings" => "timings",
+        "log" => "log",
+        "timings" => return OsString::from("--log=debug"),
         "help" | "?" => "help",
         "version" => "version",
         _ => return argument,
@@ -389,6 +385,34 @@ fn normalize_one(argument: OsString) -> OsString {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn logging_is_opt_in_and_accepts_levels() {
+        use tracing::level_filters::LevelFilter;
+        assert_eq!(parse(&["wispdisk.exe", "/list"]).log, None);
+        assert_eq!(
+            parse(&["wispdisk.exe", "/list", "/log"]).log,
+            Some(LevelFilter::INFO)
+        );
+        assert_eq!(
+            parse(&["wispdisk.exe", "/list", "/log:debug"]).log,
+            Some(LevelFilter::DEBUG)
+        );
+        assert_eq!(
+            parse(&["wispdisk.exe", "/list", "/log", "trace"]).log,
+            Some(LevelFilter::TRACE)
+        );
+    }
+
+    #[test]
+    fn rejects_logs_in_json_output_and_invalid_levels() {
+        for args in [
+            vec!["wispdisk.exe", "/list", "/json", "/log"],
+            vec!["wispdisk.exe", "/list", "/log:invalid"],
+        ] {
+            assert!(Cli::try_parse_from(normalize_windows_args(args)).is_err());
+        }
+    }
+
     #[test]
     fn accepts_inventory_and_identity_deletion() {
         assert_eq!(
@@ -634,7 +658,7 @@ mod tests {
     }
 
     #[test]
-    fn accepts_hidden_timings_switch() {
+    fn accepts_legacy_timings_alias() {
         let parsed = parse(&[
             "wispdisk.exe",
             "/add",
@@ -643,6 +667,6 @@ mod tests {
             "/size:64MiB",
             "/timings",
         ]);
-        assert!(parsed.timings);
+        assert_eq!(parsed.log, Some(tracing::level_filters::LevelFilter::DEBUG));
     }
 }

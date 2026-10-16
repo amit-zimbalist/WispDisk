@@ -35,14 +35,40 @@ implementation lives in `cli/src/driver/windows/`:
 - `volume.rs`: drive-letter state, volume identity, locks, and mount rollback;
 - `win32.rs`: shared handle ownership, device opening, encoding, and errors.
 
-`cli/src/timing.rs` provides process-wide phase diagnostics. `main` initializes
-it immediately before command execution only when `/timings` is enabled.
-Callers use `timing::mark(...)` without passing a timer or an enable flag through
-the driver. When disabled, marks return without initializing the timer, reading
-the clock, or acquiring a lock. Poisoned locks and output failures are ignored
-because diagnostics must not interrupt an operation or its rollback. A single
-phase timeline assumes sequential commands; concurrent operations would need
-per-operation timers.
+`cli/src/logging.rs` owns the opt-in logging lifetime. Its `subscriber` module
+installs a process-wide `tracing` subscriber, formats UTC system-clock timestamps,
+and owns the `tracing-appender` stdout writer guard. Its Windows `driver_events`
+module owns a uniquely named `ferrisetw::UserTrace` session and a joinable ordinary
+thread; a custom kernel-mode TraceLogging provider uses a regular provider
+session, not the system kernel logger. No Tokio runtime is used.
+
+The ETW callback decodes WispDisk's fixed event fields and forwards the original
+event timestamp and severity into the same subscriber. Windows converts the
+session's QPC timestamps to FILETIME before callback delivery. A central conversion
+uses the intact raw timestamp because ferrisetw 1.2's `timestamp()` duplicates the
+high FILETIME word and loses subsecond precision. Callback views
+do not escape; forwarded fields are copied/formatted synchronously. The formatter
+uses original ETW time for driver records and current system time for CLI events.
+Arrival order across sources need not match event-time order.
+
+Shutdown stops the owned ETW session through `ferrisetw::stop_trace_by_name`, lets `ProcessTrace`
+drain, joins its thread, and finally drops the stdout writer guard. This ordering
+avoids `ferrisetw`'s default close-before-stop behavior, which suppresses pending
+callbacks. `Logging::drop` performs cleanup and reports shutdown failures on
+stderr. Requested logging must initialize successfully before command execution;
+initialization failures print an error to stderr and exit. Later diagnostic
+failures never replace command/recovery failures. Bounded
+queues can drop events; stdout queue loss counts are reported.
+
+`driver/src/logging.h/.cpp` owns a private TraceLogging provider with GUID
+`8b6cae34-6a65-4cf1-a55b-0c9a5c224896`. StorPort's `HwInitializeTracing` and
+`HwCleanupTracing` callbacks manage registration independently of adapter views.
+Failed DriverEntry also performs idempotent cleanup. Lifecycle, management,
+allocation, and failure events are available in Release and Debug builds. The
+existing Debug circular trace and fault-injection controls remain available.
+There is no per-block-I/O logging. Calls above DISPATCH_LEVEL skip ETW, including
+adapter-control callbacks when invoked at DIRQL. Provider state and payloads must
+remain resident, and logging never waits on user-mode output or performs file I/O.
 
 Implementation helpers are private or restricted to their parent module. The
 notification module owns the event and unregisters its callback before closing

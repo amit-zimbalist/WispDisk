@@ -20,10 +20,6 @@ fn main() {
 }
 
 fn run_main() -> BuildResult<()> {
-    if !cfg!(windows) {
-        return Err("the WispDisk driver build and signing flow requires Windows".into());
-    }
-
     let options = Options::parse(env::args_os().skip(1))?;
     build(&options)
 }

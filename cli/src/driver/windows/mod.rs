@@ -15,13 +15,13 @@ mod win32;
 use anyhow::{Context, Result, bail};
 
 use std::time::Duration;
+use tracing::{info, warn};
 
 use windows_sys::Win32::Foundation::GENERIC_READ;
 
 use crate::{
     args::{Command, DriveLetter, FileSystem, MediaKind},
     protocol::{CAP_CREATE_DELETE, CAP_READ_WRITE, DiskState},
-    timing,
 };
 
 use self::{
@@ -69,12 +69,12 @@ fn add_disk(
     size_bytes: u64,
     file_system: FileSystem,
 ) -> Result<()> {
+    info!(%letter, "Validate drive letter");
     ensure_drive_letter_available(letter)?;
-    timing::mark("validate drive letter");
+    info!("Find or install adapter");
     let adapter = ensure_adapter()?;
-    timing::mark("find or install adapter");
+    info!(port = adapter.port_number, "Query driver capabilities");
     let version = adapter.query_version()?;
-    timing::mark("query driver capabilities");
     let required = CAP_CREATE_DELETE | CAP_READ_WRITE;
     if version.capabilities & required != required {
         bail!(
@@ -88,15 +88,20 @@ fn add_disk(
 
     adapter.require_recovery()?;
     let created = adapter.create_disk(letter, media, size_bytes)?;
-    timing::mark("create allocation confirmed");
+    info!(
+        adapter_instance = created.adapter_instance,
+        device_id = created.device_id,
+        size_bytes,
+        "Disk allocation created"
+    );
 
     let result: Result<()> = (|| {
         ensure_drive_letter_available(letter)?;
         let location = expected_location(&adapter, &created);
+        info!(device_id = created.device_id, "Wait for disk interface");
         let disk_number = wait_for_physical_disk(location, DEVICE_WAIT)?;
-        timing::mark("wait for disk interface");
+        info!(disk_number, "Verify disk identity");
         verify_physical_disk_location(disk_number, location)?;
-        timing::mark("verify disk identity");
         initialize_and_format(
             disk_number,
             letter,
@@ -106,14 +111,20 @@ fn add_disk(
             location,
             file_system,
         )?;
+        info!(%letter, "Wait for drive letter");
         wait_for_drive_state(letter, true, DEVICE_WAIT)?;
-        timing::mark("wait for drive letter");
+        info!(%letter, disk_number, "Verify mounted drive");
         verify_mounted_drive(letter, disk_number, location)?;
-        timing::mark("verify mounted drive");
         Ok(())
     })();
 
     if let Err(error) = result {
+        warn!(
+            adapter_instance = created.adapter_instance,
+            device_id = created.device_id,
+            error = %format_args!("{error:#}"),
+            "Disk setup failed; roll back allocation"
+        );
         let deadline = std::time::Instant::now() + DEVICE_WAIT;
         let rollback = loop {
             match delete_allocation(&adapter, created.adapter_instance, created.device_id) {
@@ -151,6 +162,7 @@ fn delete_disk(letter: DriveLetter) -> Result<()> {
     if !drive_letter_in_use(letter) {
         bail!("drive {letter} is not mounted");
     }
+    info!(%letter, "Resolve disk identity");
     let _name = get_volume_name(&mount_point(letter))?;
     let volume = open_device(
         &format!(r"\\.\{}:", char::from(letter.as_ascii())),
@@ -185,9 +197,8 @@ fn delete_disk(letter: DriveLetter) -> Result<()> {
     }
     let (_, instance, id) = matched.context("volume is not uniquely owned by WispDisk")?;
     delete_by_identity(instance, id)?;
-    timing::measure("wait for drive-letter disappearance", || {
-        wait_for_drive_state(letter, false, DEVICE_WAIT)
-    })?;
+    info!(%letter, "Wait for drive-letter disappearance");
+    wait_for_drive_state(letter, false, DEVICE_WAIT)?;
     Ok(())
 }
 
@@ -210,6 +221,11 @@ fn delete_by_identity(instance: u64, id: u32) -> Result<()> {
 }
 
 fn delete_allocation(adapter: &Adapter, instance: u64, id: u32) -> Result<()> {
+    info!(
+        adapter_instance = instance,
+        device_id = id,
+        "Resolve deletion identity"
+    );
     let state = adapter.state()?;
     if state.adapter_instance != instance {
         bail!("adapter instance changed before deletion");
@@ -223,17 +239,19 @@ fn delete_allocation(adapter: &Adapter, instance: u64, id: u32) -> Result<()> {
     }
     let location = disk_location(adapter, entry);
     let number = wait_for_physical_disk(location, DEVICE_WAIT)?;
-    timing::mark("resolve deletion identity");
-    let mut volumes = timing::measure("open target volumes", || {
-        VolumeDeletion::open(number, location)
-    })?;
+    info!(disk_number = number, "Open target volumes");
+    let mut volumes = VolumeDeletion::open(number, location)?;
     let prepared = (|| {
-        timing::measure("lock target volumes", || volumes.lock())?;
-        timing::measure("dismount target volumes", || volumes.dismount())?;
-        timing::measure("remove volume mount points", || volumes.remove_mounts())
+        info!(disk_number = number, "Lock target volumes");
+        volumes.lock()?;
+        info!(disk_number = number, "Dismount target volumes");
+        volumes.dismount()?;
+        info!(disk_number = number, "Remove volume mount points");
+        volumes.remove_mounts()
     })();
     if let Err(error) = prepared {
-        return match timing::measure("restore volume mount points", || volumes.restore()) {
+        info!(disk_number = number, "Restore volume mount points");
+        return match volumes.restore() {
             Ok(()) => Err(error),
             Err(restore) => Err(recovery_failed(
                 error,
@@ -253,7 +271,8 @@ fn delete_allocation(adapter: &Adapter, instance: u64, id: u32) -> Result<()> {
                         .any(|entry| entry.disk.device_id == id && entry.state == 1)
             });
         if still_online {
-            return match timing::measure("restore volume mount points", || volumes.restore()) {
+            info!(disk_number = number, "Restore volume mount points");
+            return match volumes.restore() {
                 Ok(()) => Err(error.context("deletion rejected; original mount points restored")),
                 Err(restore) => Err(recovery_failed(
                     error,
@@ -267,9 +286,12 @@ fn delete_allocation(adapter: &Adapter, instance: u64, id: u32) -> Result<()> {
         )));
     }
     drop(volumes);
-    timing::measure("wait for device disappearance", || {
-        wait_for_physical_disk_absent(number, location, DEVICE_WAIT)
-    }).with_context(|| format!("driver allocation for device {id} was removed, but Windows disappearance was not confirmed"))?;
+    info!(
+        device_id = id,
+        disk_number = number,
+        "Wait for device disappearance"
+    );
+    wait_for_physical_disk_absent(number, location, DEVICE_WAIT).with_context(|| format!("driver allocation for device {id} was removed, but Windows disappearance was not confirmed"))?;
     Ok(())
 }
 
@@ -296,6 +318,8 @@ fn ensure_adapter() -> Result<Adapter> {
         return Ok(adapter);
     }
 
+    info!("Install embedded driver");
     install_embedded_driver()?;
+    info!("Wait for adapter");
     wait_for_adapter(DEVICE_WAIT)
 }

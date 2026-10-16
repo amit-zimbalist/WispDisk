@@ -70,9 +70,10 @@ errors or `anyhow` with context as appropriate in application code.
 - Encapsulate unsafe FFI and resource cleanup in focused components.
   Make the safety assumptions clear at unsafe boundaries.
 - Avoid threading optional diagnostic state through every function.
-  Use the existing opt-in process-wide timing facility for CLI timings.
-- Keep disabled diagnostics inexpensive. Diagnostic failures must not
-  interrupt normal operations or recovery.
+  Use the opt-in process-wide logging facility for CLI diagnostics.
+- Keep disabled diagnostics inexpensive. If logging is requested, initialization
+  failures must abort before executing the command. Later diagnostic failures
+  must not interrupt normal operations or recovery.
 
 ## Verification
 

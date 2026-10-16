@@ -102,3 +102,6 @@ HW_STARTIO WispDiskHwStartIo;
 HW_RESET_BUS WispDiskHwResetBus;
 HW_ADAPTER_CONTROL WispDiskHwAdapterControl;
 HW_FREE_ADAPTER_RESOURCES WispDiskHwFreeAdapterResources;
+
+HW_INITIALIZE_TRACING WispDiskHwInitializeTracing;
+HW_CLEANUP_TRACING WispDiskHwCleanupTracing;

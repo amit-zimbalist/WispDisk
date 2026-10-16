@@ -4,6 +4,7 @@
 #include "control_request.h"
 #include "diagnostics.h"
 #include "disk_operations.h"
+#include "logging.h"
 #include "operation_state.h"
 
 namespace wispdisk::management {
@@ -13,6 +14,12 @@ HandleCreateControl(PWISPDISK_ADAPTER_EXTENSION adapter, const ControlRequest& c
     WISPDISK_CREATE_REQUEST request{};
     const NTSTATUS status = ValidateCreateRequest(control, request);
     if (!NT_SUCCESS(status)) {
+        WARN(
+            "CreateRequestValidationFailed",
+            .AdapterInstance = adapter->AdapterInstance,
+            .OperationId = request.Header.CorrelationId,
+            .Status = status,
+            .SizeBytes = request.SizeBytes);
         WriteCreateResponse(control, request, status);
         return WispDiskIoControlDisposition::Complete;
     }
@@ -24,6 +31,12 @@ HandleDeleteControl(PWISPDISK_ADAPTER_EXTENSION adapter, const ControlRequest& c
     WISPDISK_DELETE_REQUEST request{};
     const NTSTATUS status = ValidateDeleteRequest(control, request);
     if (!NT_SUCCESS(status)) {
+        WARN(
+            "DeleteRequestValidationFailed",
+            .AdapterInstance = adapter->AdapterInstance,
+            .OperationId = request.Header.CorrelationId,
+            .DeviceId = request.DeviceId,
+            .Status = status);
         WriteDeleteResponse(control, request, status);
         return WispDiskIoControlDisposition::Complete;
     }

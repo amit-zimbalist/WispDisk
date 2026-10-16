@@ -1,6 +1,47 @@
 #include "diagnostics.h"
+#include "logging.h"
 
 namespace wispdisk::management::diagnostics {
+namespace {
+
+const char* PhaseName(TracePhase phase) noexcept {
+    switch (phase) {
+        case TracePhase::Accepted:
+            return "ManagementAccepted";
+        case TracePhase::Worker:
+            return "ManagementWorker";
+        case TracePhase::Committed:
+            return "ManagementCommitted";
+        case TracePhase::Response:
+            return "ManagementResponse";
+        case TracePhase::Complete:
+            return "ManagementComplete";
+        case TracePhase::BusChange:
+            return "ManagementBusChange";
+        case TracePhase::Rejected:
+            return "ManagementRejected";
+    }
+    return "ManagementUnknownPhase";
+}
+
+void LogPhase(
+    const WISPDISK_ADAPTER_EXTENSION& extension,
+    ULONGLONG operation,
+    ULONG device,
+    TracePhase phase,
+    NTSTATUS status,
+    ULONG srbStatus) noexcept {
+    logging::Write(
+        NT_SUCCESS(status) ? logging::Level::Verbose : logging::Level::Warning,
+        {.Message = PhaseName(phase),
+         .AdapterInstance = extension.AdapterInstance,
+         .OperationId = operation,
+         .DeviceId = device,
+         .Status = status,
+         .SrbStatus = srbStatus});
+}
+
+} // namespace
 
 void TraceLocked(
     WISPDISK_ADAPTER_EXTENSION& extension,
@@ -11,6 +52,7 @@ void TraceLocked(
     NTSTATUS status,
     ULONG srbStatus) noexcept {
     lock.AssertProtects(&extension.LunLock);
+    LogPhase(extension, operation, device, phase, status, srbStatus);
 #if DBG
     if (extension.TraceEnabled == 0) {
         return;
@@ -46,12 +88,7 @@ void Trace(
     support::ScopedSpinLock lock{&extension.LunLock};
     TraceLocked(extension, lock, operation, device, phase, status, srbStatus);
 #else
-    UNREFERENCED_PARAMETER(extension);
-    UNREFERENCED_PARAMETER(operation);
-    UNREFERENCED_PARAMETER(device);
-    UNREFERENCED_PARAMETER(phase);
-    UNREFERENCED_PARAMETER(status);
-    UNREFERENCED_PARAMETER(srbStatus);
+    LogPhase(extension, operation, device, phase, status, srbStatus);
 #endif
 }
 

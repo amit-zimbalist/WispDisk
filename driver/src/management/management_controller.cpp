@@ -1,6 +1,7 @@
 #include "management_controller.h"
 
 #include "diagnostics.h"
+#include "logging.h"
 #include "storage/lun_store.h"
 
 namespace wispdisk::management {
@@ -50,8 +51,12 @@ void ManagementController::CloseAdmission() const noexcept {
 _Use_decl_annotations_
 void ManagementController::Shutdown() const noexcept {
     CloseAdmission();
+    DEBUG("ManagementIdleWaitStarted", .AdapterInstance = extension_.AdapterInstance);
     WaitForIdle();
+    DEBUG("ManagementIdleWaitCompleted", .AdapterInstance = extension_.AdapterInstance);
+    DEBUG("ShutdownDiskDrainStarted", .AdapterInstance = extension_.AdapterInstance);
     DrainAndReleaseDisks();
+    DEBUG("ShutdownDiskDrainCompleted", .AdapterInstance = extension_.AdapterInstance);
     ReleaseWorker();
 }
 
@@ -91,9 +96,17 @@ ManagementController::ReserveOperation(ULONG mutation, OperationResult& result) 
     result = {};
     support::ScopedSpinLock lock{&extension_.LunLock};
     if (mutation != WispDiskControlCreateDisk && mutation != WispDiskControlDeleteDisk) {
+        WARN(
+            "OperationMutationRejected",
+            .AdapterInstance = extension_.AdapterInstance,
+            .Status = STATUS_INVALID_PARAMETER);
         return STATUS_INVALID_PARAMETER;
     }
     if (extension_.AdapterStopping != 0) {
+        DEBUG(
+            "OperationReservationStopping",
+            .AdapterInstance = extension_.AdapterInstance,
+            .Status = STATUS_DEVICE_NOT_READY);
         return STATUS_DEVICE_NOT_READY;
     }
     WISPDISK_OPERATION_RECORD* selected = nullptr;
@@ -113,6 +126,10 @@ ManagementController::ReserveOperation(ULONG mutation, OperationResult& result) 
         }
     }
     if (selected == nullptr || extension_.NextOperationId == 0) {
+        WARN(
+            "OperationReservationExhausted",
+            .AdapterInstance = extension_.AdapterInstance,
+            .Status = STATUS_INSUFFICIENT_RESOURCES);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
     *selected = {
@@ -122,6 +139,10 @@ ManagementController::ReserveOperation(ULONG mutation, OperationResult& result) 
         .Result = STATUS_PENDING,
     };
     result = CopyResultLocked(*selected, lock);
+    DEBUG(
+        "OperationReserved",
+        .AdapterInstance = extension_.AdapterInstance,
+        .OperationId = result.operationId);
     return STATUS_SUCCESS;
 }
 
@@ -303,9 +324,15 @@ bool ManagementController::PrepareSubmission(
     const ControlRequest& control,
     const MutationCommand& command) const noexcept {
     const ULONGLONG correlation = command.CorrelationId();
+    const ULONGLONG operationId = command.IsReserved() ? command.identity.OperationId : correlation;
     support::ScopedSpinLock lock{&extension_.LunLock};
     NTSTATUS status = BeginManagementLocked(lock);
     if (!NT_SUCCESS(status)) {
+        DEBUG(
+            "ManagementAdmissionRejected",
+            .AdapterInstance = extension_.AdapterInstance,
+            .OperationId = operationId,
+            .Status = status);
         control.WriteError(command.operation, status, correlation);
         return false;
     }
@@ -315,8 +342,20 @@ bool ManagementController::PrepareSubmission(
         status = BindOperationLocked(command, accepted, replay, lock);
         if (!NT_SUCCESS(status) || !accepted) {
             if (!NT_SUCCESS(status)) {
+                WARN(
+                    status == STATUS_NOT_FOUND ? "OperationIdentityRejected"
+                                               : "OperationParametersRejected",
+                    .AdapterInstance = extension_.AdapterInstance,
+                    .OperationId = operationId,
+                    .Status = status);
                 control.WriteError(command.operation, status, correlation);
             } else {
+                DEBUG(
+                    "OperationReplayed",
+                    .AdapterInstance = extension_.AdapterInstance,
+                    .OperationId = replay.operationId,
+                    .DeviceId = replay.deviceId,
+                    .Status = replay.status);
                 WriteOperationResponse(control, replay, correlation);
             }
             EndManagementLocked(lock);
@@ -330,7 +369,7 @@ bool ManagementController::PrepareSubmission(
     diagnostics::TraceLocked(
         extension_,
         lock,
-        command.IsReserved() ? command.identity.OperationId : correlation,
+        operationId,
         0,
         TracePhase::Accepted,
         STATUS_PENDING,
@@ -354,10 +393,13 @@ WispDiskIoControlDisposition ManagementController::Submit(
                                        control.srb);
     if (storStatus != STOR_STATUS_SUCCESS) {
         support::ScopedSpinLock lock{&extension_.LunLock};
-        KdPrint(
-            ("WispDisk: failed to queue management operation=%lu, StorPort status=%lu\n",
-             static_cast<ULONG>(command.operation),
-             storStatus));
+        ERROR(
+            "ManagementQueueFailed",
+            .AdapterInstance = extension_.AdapterInstance,
+            .OperationId =
+                command.IsReserved() ? command.identity.OperationId : command.CorrelationId(),
+            .Status = STATUS_INSUFFICIENT_RESOURCES,
+            .StorPortStatus = storStatus);
         if (command.IsReserved()) {
             FailOperationLocked(
                 command.identity.OperationId,
@@ -394,12 +436,16 @@ NTSTATUS ManagementController::DeleteDisk(ULONG deviceId) const noexcept {
     const storage::LunStore disks{extension_};
     auto* lun = disks.MarkLunStopping(deviceId);
     if (lun == nullptr) {
-        KdPrint(("WispDisk: delete requested for unknown disk id=%lu\n", deviceId));
+        WARN(
+            "DeleteUnknownDisk",
+            .AdapterInstance = extension_.AdapterInstance,
+            .DeviceId = deviceId,
+            .Status = STATUS_NO_SUCH_DEVICE);
         return STATUS_NO_SUCH_DEVICE;
     }
     disks.DrainAndFreeBacking(*lun, deviceId);
     FinalizeDiskRemoval(*lun, deviceId);
-    KdPrint(("WispDisk: deleted disk id=%lu\n", deviceId));
+    INFO("DiskDeleted", .AdapterInstance = extension_.AdapterInstance, .DeviceId = deviceId);
     return STATUS_SUCCESS;
 }
 
@@ -608,6 +654,7 @@ void ManagementController::DrainAndReleaseDisks() const noexcept {
 _Use_decl_annotations_
 void ManagementController::ReleaseWorker() const noexcept {
     if (extension_.ManagementWorker != nullptr) {
+        DEBUG("ManagementWorkerReleaseStarted", .AdapterInstance = extension_.AdapterInstance);
         // The idle callback can still be unwinding inside StorPort.
         ULONG status;
         do {
@@ -617,6 +664,16 @@ void ManagementController::ReleaseWorker() const noexcept {
                 KeDelayExecutionThread(KernelMode, FALSE, &delay);
             }
         } while (status == STOR_STATUS_BUSY);
+        if (status != STOR_STATUS_SUCCESS) {
+            ERROR(
+                "ManagementWorkerReleaseFailed",
+                .AdapterInstance = extension_.AdapterInstance,
+                .StorPortStatus = status);
+        } else {
+            DEBUG(
+                "ManagementWorkerReleaseCompleted",
+                .AdapterInstance = extension_.AdapterInstance);
+        }
         extension_.ManagementWorker = nullptr;
     }
 }

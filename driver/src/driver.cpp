@@ -1,6 +1,7 @@
 #include "driver.h"
 
 #include "adapter_context.h"
+#include "logging.h"
 
 namespace wispdisk::driver {
 namespace {
@@ -25,7 +26,6 @@ SCSI_ADAPTER_CONTROL_STATUS QuerySupportedControlTypes(_Inout_opt_ PVOID paramet
 } // namespace wispdisk::driver
 
 extern "C" ULONG DriverEntry(_In_ PVOID driverObject, _In_ PVOID registryPath) {
-    KdPrint(("WispDisk: DriverEntry\n"));
     HW_INITIALIZATION_DATA initializationData{
         .HwInitializationDataSize = sizeof(HW_INITIALIZATION_DATA),
         .AdapterInterfaceType = Internal,
@@ -41,6 +41,8 @@ extern "C" ULONG DriverEntry(_In_ PVOID driverObject, _In_ PVOID registryPath) {
         .MultipleRequestPerLu = TRUE,
         .HwAdapterControl = WispDiskHwAdapterControl,
         .HwFreeAdapterResources = WispDiskHwFreeAdapterResources,
+        .HwInitializeTracing = WispDiskHwInitializeTracing,
+        .HwCleanupTracing = WispDiskHwCleanupTracing,
         .FeatureSupport = STOR_FEATURE_VIRTUAL_MINIPORT | STOR_FEATURE_ADAPTER_NOT_REQUIRE_IO_PORT,
         .SrbTypeFlags = SRB_TYPE_FLAG_SCSI_REQUEST_BLOCK,
         .AddressTypeFlags = ADDRESS_TYPE_FLAG_BTL8,
@@ -48,7 +50,14 @@ extern "C" ULONG DriverEntry(_In_ PVOID driverObject, _In_ PVOID registryPath) {
 
     const ULONG status =
         StorPortInitialize(driverObject, registryPath, &initializationData, nullptr);
-    KdPrint(("WispDisk: StorPortInitialize returned 0x%08lX\n", status));
+    wispdisk::logging::Write(
+        NT_SUCCESS(status) ? wispdisk::logging::Level::Information
+                           : wispdisk::logging::Level::Error,
+        {.Message = "DriverInitialized", .Status = static_cast<NTSTATUS>(status)});
+    // DriverUnload is not called when DriverEntry fails.
+    if (!NT_SUCCESS(status)) {
+        wispdisk::logging::Shutdown();
+    }
     return status;
 }
 
@@ -67,14 +76,14 @@ ULONG WispDiskHwFindAdapter(
     UNREFERENCED_PARAMETER(argumentString);
 
     if (deviceExtension == nullptr || configInfo == nullptr || again == nullptr) {
-        KdPrint(("WispDisk: invalid adapter discovery parameters\n"));
+        ERROR("AdapterDiscoveryRejected", .Status = STATUS_INVALID_PARAMETER);
         return SP_RETURN_BAD_CONFIG;
     }
 
     wispdisk::driver::AdapterContext adapter{
         *static_cast<PWISPDISK_ADAPTER_EXTENSION>(deviceExtension)};
     if (!adapter.Initialize()) {
-        KdPrint(("WispDisk: failed to initialize management worker\n"));
+        ERROR("ManagementWorkerInitializationFailed", .Status = STATUS_UNSUCCESSFUL);
         return SP_RETURN_ERROR;
     }
 
@@ -90,7 +99,10 @@ ULONG WispDiskHwFindAdapter(
     configInfo->MaximumNumberOfLogicalUnits = kMaximumDiskCount;
     configInfo->AlignmentMask = FILE_LONG_ALIGNMENT;
     *again = FALSE;
-    KdPrint(("WispDisk: virtual adapter discovered\n"));
+    INFO(
+        "AdapterDiscovered",
+        .AdapterInstance =
+            static_cast<PWISPDISK_ADAPTER_EXTENSION>(deviceExtension)->AdapterInstance);
     return SP_RETURN_FOUND;
 }
 
@@ -104,7 +116,10 @@ BOOLEAN WispDiskHwInitialize(PVOID deviceExtension) {
     if (!adapter.SetStopping(false)) {
         return FALSE;
     }
-    KdPrint(("WispDisk: adapter initialized\n"));
+    INFO(
+        "AdapterInitialized",
+        .AdapterInstance =
+            static_cast<PWISPDISK_ADAPTER_EXTENSION>(deviceExtension)->AdapterInstance);
     return TRUE;
 }
 
@@ -143,13 +158,19 @@ SCSI_ADAPTER_CONTROL_STATUS WispDiskHwAdapterControl(
             if (!adapter.SetStopping(true)) {
                 return ScsiAdapterControlUnsuccessful;
             }
-            KdPrint(("WispDisk: adapter stopped\n"));
+            INFO(
+                "AdapterStopped",
+                .AdapterInstance =
+                    static_cast<PWISPDISK_ADAPTER_EXTENSION>(deviceExtension)->AdapterInstance);
             return ScsiAdapterControlSuccess;
         case ScsiRestartAdapter:
             if (!adapter.SetStopping(false)) {
                 return ScsiAdapterControlUnsuccessful;
             }
-            KdPrint(("WispDisk: adapter restarted\n"));
+            INFO(
+                "AdapterRestarted",
+                .AdapterInstance =
+                    static_cast<PWISPDISK_ADAPTER_EXTENSION>(deviceExtension)->AdapterInstance);
             return ScsiAdapterControlSuccess;
         default:
             return ScsiAdapterControlUnsuccessful;
@@ -166,7 +187,29 @@ VOID WispDiskHwFreeAdapterResources(PVOID deviceExtension) {
     if (!adapter.IsInitialized()) {
         return;
     }
-    KdPrint(("WispDisk: releasing adapter resources\n"));
+    INFO(
+        "AdapterResourcesReleasing",
+        .AdapterInstance =
+            static_cast<PWISPDISK_ADAPTER_EXTENSION>(deviceExtension)->AdapterInstance);
     adapter.ReleaseResources();
-    KdPrint(("WispDisk: adapter resources released\n"));
+    INFO(
+        "AdapterResourcesReleased",
+        .AdapterInstance =
+            static_cast<PWISPDISK_ADAPTER_EXTENSION>(deviceExtension)->AdapterInstance);
+}
+
+_Use_decl_annotations_
+VOID WispDiskHwInitializeTracing(PVOID driverObject, PVOID registryPath) {
+    UNREFERENCED_PARAMETER(driverObject);
+    UNREFERENCED_PARAMETER(registryPath);
+    const NTSTATUS status = wispdisk::logging::Initialize();
+    if (!NT_SUCCESS(status)) {
+        ERROR("TracingInitializationFailed", .Status = status);
+    }
+}
+
+_Use_decl_annotations_
+VOID WispDiskHwCleanupTracing(PVOID driverObject) {
+    UNREFERENCED_PARAMETER(driverObject);
+    wispdisk::logging::Shutdown();
 }

@@ -54,10 +54,6 @@ fn main() {
 }
 
 fn embed_windows_resources() {
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
-        return;
-    }
-
     let icon_path = PathBuf::from(
         env::var_os("CARGO_MANIFEST_DIR").expect("Cargo always defines CARGO_MANIFEST_DIR"),
     )

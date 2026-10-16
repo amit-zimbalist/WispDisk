@@ -31,6 +31,20 @@ in place so those tools can reason about the entry points. Static Driver
 Verifier is an additional gate once a supported rule set for this StorPort
 miniport is selected; it does not replace runtime Driver Verifier.
 
+## Logging verification
+
+In an elevated disposable VM, run an add/delete cycle with `/log debug`. Confirm
+that CLI and driver management events appear on stdout with UTC timestamps,
+matching adapter/operation identities and statuses. Verify that the
+last completion event is retained when the CLI exits immediately. Repeat with
+output redirected to a file and with a slow pipe reader; inspect loss warnings.
+Confirm each CLI exit removes its uniquely named `WispDisk-*` ETW session.
+
+Run without elevation and with `/log` to verify capture denial prints an error to
+stderr and returns exit code 1 before executing the command. Verify `/list /json` remains pure
+JSON and rejects `/log`. Exercise adapter removal/reload to cover provider cleanup,
+and injected management failures to verify warning/error severity in both builds.
+
 ## Signing in the guest
 
 Use a dedicated, disposable test certificate. Sign the catalog, install only

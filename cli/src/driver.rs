@@ -4,7 +4,6 @@ use anyhow::{Result, bail};
 
 use crate::{args::Command, payload};
 
-#[cfg(windows)]
 mod windows;
 
 pub fn execute(command: &Command) -> Result<()> {
@@ -12,33 +11,19 @@ pub fn execute(command: &Command) -> Result<()> {
         bail!(DriverError::PackageNotEmbedded);
     }
 
-    #[cfg(windows)]
-    {
-        windows::execute(command)
-    }
-
-    #[cfg(not(windows))]
-    {
-        let _ = command;
-        bail!(DriverError::UnsupportedPlatform)
-    }
+    windows::execute(command)
 }
 
 pub fn error_exit_code(error: &anyhow::Error) -> u8 {
-    #[cfg(windows)]
     if windows::is_unresolved(error) {
         return 3;
     }
-    #[cfg(not(windows))]
-    let _ = error;
     1
 }
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum DriverError {
     PackageNotEmbedded,
-    #[cfg(not(windows))]
-    UnsupportedPlatform,
 }
 
 impl fmt::Display for DriverError {
@@ -47,10 +32,6 @@ impl fmt::Display for DriverError {
             Self::PackageNotEmbedded => formatter.write_str(
                 "no signed driver package is embedded; build with WISPDISK_DRIVER_PACKAGE_DIR set",
             ),
-            #[cfg(not(windows))]
-            Self::UnsupportedPlatform => {
-                formatter.write_str("wispdisk is only supported on Windows")
-            }
         }
     }
 }

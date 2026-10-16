@@ -1,10 +1,12 @@
 #include "operation_state.h"
 #include "adapter_context.h"
+#include "logging.h"
 
 namespace wispdisk::management {
 
 template <typename Request>
 static NTSTATUS ReadOperationRequest(
+    const WISPDISK_ADAPTER_EXTENSION& adapter,
     const ControlRequest& control,
     Request& request,
     WISPDISK_REQUEST_HEADER& header) noexcept {
@@ -14,6 +16,11 @@ static NTSTATUS ReadOperationRequest(
         status = STATUS_BUFFER_TOO_SMALL;
     }
     if (!NT_SUCCESS(status)) {
+        WARN(
+            "OperationRequestValidationFailed",
+            .AdapterInstance = adapter.AdapterInstance,
+            .OperationId = header.CorrelationId,
+            .Status = status);
         control.WriteError(operation, status, header.CorrelationId);
     }
     return status;
@@ -24,7 +31,7 @@ void HandleReserveOperation(
     const ControlRequest& control) noexcept {
     WISPDISK_REQUEST_HEADER header{};
     WISPDISK_RESERVE_REQUEST request{};
-    if (!NT_SUCCESS(ReadOperationRequest(control, request, header))) {
+    if (!NT_SUCCESS(ReadOperationRequest(*adapter, control, request, header))) {
         return;
     }
     OperationResult result{};
@@ -45,7 +52,7 @@ void HandleQueryOperation(
     const ControlRequest& control) noexcept {
     WISPDISK_REQUEST_HEADER header{};
     WISPDISK_OPERATION_REQUEST request{};
-    if (!NT_SUCCESS(ReadOperationRequest(control, request, header))) {
+    if (!NT_SUCCESS(ReadOperationRequest(*adapter, control, request, header))) {
         return;
     }
     OperationResult result{};
@@ -65,7 +72,7 @@ WispDiskIoControlDisposition HandleReservedCreateControl(
     const ControlRequest& control) noexcept {
     WISPDISK_REQUEST_HEADER header{};
     WISPDISK_RESERVED_CREATE_REQUEST request{};
-    if (!NT_SUCCESS(ReadOperationRequest(control, request, header))) {
+    if (!NT_SUCCESS(ReadOperationRequest(*adapter, control, request, header))) {
         return WispDiskIoControlDisposition::Complete;
     }
     WISPDISK_CREATE_REQUEST parameters{
@@ -84,6 +91,12 @@ WispDiskIoControlDisposition HandleReservedCreateControl(
     WISPDISK_CREATE_REQUEST validated{};
     const NTSTATUS status = ValidateCreateRequest(validation, validated);
     if (!NT_SUCCESS(status)) {
+        WARN(
+            "ReservedCreateRequestValidationFailed",
+            .AdapterInstance = adapter->AdapterInstance,
+            .OperationId = request.Operation.OperationId,
+            .Status = status,
+            .SizeBytes = request.SizeBytes);
         control.WriteError(WispDiskControlCreateReserved, status, header.CorrelationId);
         return WispDiskIoControlDisposition::Complete;
     }
@@ -98,7 +111,7 @@ WispDiskIoControlDisposition HandleReservedDeleteControl(
     const ControlRequest& control) noexcept {
     WISPDISK_REQUEST_HEADER header{};
     WISPDISK_RESERVED_DELETE_REQUEST request{};
-    if (!NT_SUCCESS(ReadOperationRequest(control, request, header))) {
+    if (!NT_SUCCESS(ReadOperationRequest(*adapter, control, request, header))) {
         return WispDiskIoControlDisposition::Complete;
     }
     WISPDISK_DELETE_REQUEST parameters{
@@ -113,6 +126,12 @@ WispDiskIoControlDisposition HandleReservedDeleteControl(
     WISPDISK_DELETE_REQUEST validated{};
     const NTSTATUS status = ValidateDeleteRequest(validation, validated);
     if (!NT_SUCCESS(status)) {
+        WARN(
+            "ReservedDeleteRequestValidationFailed",
+            .AdapterInstance = adapter->AdapterInstance,
+            .OperationId = request.Operation.OperationId,
+            .DeviceId = request.DeviceId,
+            .Status = status);
         control.WriteError(WispDiskControlDeleteReserved, status, header.CorrelationId);
         return WispDiskIoControlDisposition::Complete;
     }

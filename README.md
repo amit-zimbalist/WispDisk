@@ -91,21 +91,31 @@ and directs automation to inventory instead of starting another mutation.
 Exit code 3 identifies an unresolved mutation outcome (including an unresolved
 rollback), code 1 an ordinary execution failure, and code 2 invalid arguments.
 
-Use the hidden development switch `/dry-run` to exercise validation without
-touching a driver:
+Use `/log [level]` for combined CLI and driver diagnostics on stdout. `/log`
+defaults to `info`; select `debug` or `trace` for management events. Each line
+includes the system clock in UTC (RFC 3339), severity, component, and structured
+fields. Driver lines retain their original ETW event time. `/timings` remains a
+legacy alias for `/log debug`.
+CLI logs report driver requests, provisioning, formatting, removal, and rollback
+progress.
 
 ```powershell
-cargo run -p wispdisk-cli -- /add /rem /letter:R /size:64MiB /dry-run
+wispdisk.exe /add /hdd /letter R /size 128MiB /log debug
+wispdisk.exe /add /rem /letter R /size 64MiB /log > wispdisk.log
 ```
 
-Use the hidden `/timings` switch in a disposable test VM to print elapsed time
-for adapter discovery, backing-store allocation/zeroing, PnP discovery, each
-storage-provisioning phase, filesystem formatting, and final identity
-verification:
+Driver capture requires an elevated process (or appropriate ETW session/provider
+permissions). If logging initialization or driver capture setup fails, the CLI
+prints an error to stderr and exits before executing the command.
+Capture lasts for the command, includes all WispDisk adapters, and cannot recover
+events emitted before the session started. `/log` conflicts with `/json` so JSON
+stdout stays machine-readable. Normal command output remains on stdout alongside
+opted-in diagnostic lines.
 
-```powershell
-wispdisk.exe /add /hdd /letter R /size 128MiB /timings
-```
+Logging uses bounded ETW buffers and a bounded stdout queue. Slow readers can
+cause diagnostic loss; counts are reported when available. File output is handled
+by shell redirection; the driver never opens a log file. Use a disposable test VM
+for driver load/unload and disk operations.
 
 ## Repository layout
 

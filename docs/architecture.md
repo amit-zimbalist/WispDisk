@@ -59,6 +59,64 @@ variants, Win32 error codes remain inspectable, and the CLI prints the complete
 context chain. If recovery also fails, its error is retained alongside the
 primary failure rather than replacing or flattening it.
 
+Protocol responses expose validation methods for their specific meaning.
+`TryFrom<OperationResponse>` constructs `CreatedDisk` or a reserved
+`OperationHandle` only after validating the corresponding response. Request
+identity matching stays in recovery, and failed create conversion retains the
+original unresolved-operation handle.
+
+### Miniport adapter context
+
+The adapter components are non-owning views over StorPort's plain extension
+storage. `AdapterContext` coordinates initialization, SRB dispatch, stop/restart,
+and explicit teardown. Its `Management()` and `Disks()` accessors return
+lightweight views backed by the existing extension storage.
+
+| Component | Public API and responsibility |
+| --- | --- |
+| `adapter_context.h/.cpp` | `Initialize`, `SetStopping`, `StartIo`, `ReleaseResources`: lifecycle and dispatch. |
+| `management/management_controller.h/.cpp` | `Initialize`, `Shutdown`, `ReserveOperation`, `QueryOperation`, `SubmitCreate`, `SubmitDelete`, `SnapshotState`: management lifecycle, admission, replay, worker handoff, retained outcomes, and completion. `ProcessWorkItem` is the StorPort worker entry point. |
+| `storage/lun_store.h/.cpp` | `AcquireIo`, `SnapshotOnlineDisks`, `SnapshotOnlineLuns`: leased I/O and online inventory. Mutation and draining primitives are private to management coordination. |
+| `storage/lun_io_lease.h/.cpp` | `operator bool`, `view`: an active I/O reference released by the destructor. The view is usable only while the lease is alive. |
+| `management/diagnostics.h/.cpp` | Namespace functions for bounded tracing and Debug-only diagnostic controls. |
+
+Protocol handlers validate/decode wire requests before calling the controller.
+The borrowed `ControlRequest` view is constructed through `FromSrb`, which
+returns an empty view for a null SRB or invalid control envelope. Its typed
+`ReadRequest` and `WriteResponse` methods use the shared `WireStructure` concept
+to require trivially copyable, standard-layout types and derive their wire sizes.
+Request decoding preserves the common header on validation errors; response
+writing checks capacity before copying. `WriteError` preserves the original
+status when a buffer cannot fit an error header. `PrepareCompletion` updates
+response metadata; SRB completion and ownership transfer remain explicit.
+Operation-specific validation and response-capacity checks before mutations stay
+in the handlers, along with the short-buffer fallback for simple error responses.
+Reservation and query results are copied values; table pointers and locking
+views do not escape through the public API. The controller admits management
+work, binds immutable replay parameters, and publishes Pending under one
+`LunLock` acquisition. Its inventory snapshot reads both LUNs and pending
+operations under that same lock. Every `...Locked` helper accepts a live guard
+and asserts that it protects the correct adapter lock in Debug builds. The
+extension storage documents which fields use that lock and which lifecycle
+updates run outside it; blocking worker and teardown APIs declare PASSIVE_LEVEL
+requirements through SAL. Required internal output arguments use references.
+
+Pool allocation, I/O draining, SRB completion, and bus notifications run outside
+the spin lock. After backing-store release, the controller finalizes LUN removal
+and marks its create record Deleted together under the lock. Reserved create
+results are published with the LUN's creating-operation ID under the lock.
+Stop/restart callbacks use atomic flag updates. The controller initializes its
+management state and worker through `Initialize`. Its `Shutdown` closes admission
+under the lock, waits for the final worker access, drains/releases LUNs, and frees
+the worker. `AdapterContext` delegates to these lifecycle methods and invalidates
+the adapter signature after shutdown returns; it needs no friendship with the
+controller. Waiting and worker-release helpers remain private.
+
+Driver C++ formatting is defined by the repository's `.clang-format`, including
+the layout of WDK annotations. Diagnostic control codes and injection modes have
+shared names in `management/diagnostics.h`; their numeric wire values stay fixed.
+`ControlRequest::ioControl` names the borrowed SRB control header.
+
 ## Add flow
 
 1. Parse and validate `/add`, media kind, drive letter, byte size, and selected

@@ -9,11 +9,7 @@ namespace wispdisk::support {
 
 class StorPortPoolAllocation final {
 public:
-    StorPortPoolAllocation(
-        _In_ PVOID deviceExtension,
-        _In_ ULONG size,
-        _In_ ULONG tag
-    ) noexcept;
+    StorPortPoolAllocation(_In_ PVOID deviceExtension, _In_ ULONG size, _In_ ULONG tag) noexcept;
     ~StorPortPoolAllocation() noexcept;
 
     StorPortPoolAllocation(const StorPortPoolAllocation&) = delete;

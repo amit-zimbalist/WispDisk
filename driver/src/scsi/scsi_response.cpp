@@ -3,10 +3,8 @@
 namespace wispdisk::scsi {
 
 ULONG ReadBigEndian32(_In_reads_(4) const UCHAR* value) noexcept {
-    return (static_cast<ULONG>(value[0]) << 24) |
-           (static_cast<ULONG>(value[1]) << 16) |
-           (static_cast<ULONG>(value[2]) << 8) |
-           static_cast<ULONG>(value[3]);
+    return (static_cast<ULONG>(value[0]) << 24) | (static_cast<ULONG>(value[1]) << 16) |
+           (static_cast<ULONG>(value[2]) << 8) | static_cast<ULONG>(value[3]);
 }
 
 ULONGLONG ReadBigEndian64(_In_reads_(8) const UCHAR* value) noexcept {
@@ -48,8 +46,7 @@ UCHAR SetSense(
     _Inout_ PSCSI_REQUEST_BLOCK srb,
     _In_ UCHAR senseKey,
     _In_ UCHAR additionalSenseCode,
-    _In_ UCHAR additionalSenseQualifier
-) noexcept {
+    _In_ UCHAR additionalSenseQualifier) noexcept {
     srb->DataTransferLength = 0;
     srb->ScsiStatus = SCSISTAT_CHECK_CONDITION;
 
@@ -70,8 +67,7 @@ UCHAR SetSense(
 UCHAR CopyScsiResponse(
     _Inout_ PSCSI_REQUEST_BLOCK srb,
     _In_reads_bytes_(responseLength) const void* response,
-    _In_ ULONG responseLength
-) noexcept {
+    _In_ ULONG responseLength) noexcept {
     if (responseLength != 0 && srb->DataBuffer == nullptr) {
         return SetSense(srb, SCSI_SENSE_ILLEGAL_REQUEST, SCSI_ADSENSE_INVALID_CDB);
     }

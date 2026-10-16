@@ -1,9 +1,11 @@
 //! Windows add/delete orchestration. Platform details live in focused sibling modules.
 
 mod adapter;
+mod control_operation;
 mod disk;
 mod disk_interface_notification;
 mod install;
+mod inventory;
 mod recovery;
 mod storage;
 mod volume;
@@ -14,7 +16,6 @@ use anyhow::{Context, Result, bail};
 
 use std::time::Duration;
 
-use serde::Serialize;
 use windows_sys::Win32::Foundation::GENERIC_READ;
 
 use crate::{
@@ -26,17 +27,18 @@ use crate::{
 use self::{
     adapter::{Adapter, CreatedDisk, adapters, wait_for_adapter},
     disk::{
-        ScsiLocation, find_physical_disk, physical_disk_address, verify_physical_disk_location,
-        wait_for_physical_disk, wait_for_physical_disk_absent,
+        ScsiLocation, physical_disk_address, verify_physical_disk_location, wait_for_physical_disk,
+        wait_for_physical_disk_absent,
     },
     install::install_embedded_driver,
+    inventory::list_inventory,
     recovery::{UnresolvedOutcome, recovery_failed},
     storage::initialize_and_format,
     volume::{
         drive_letter_in_use, ensure_drive_letter_available, get_volume_name, mount_point,
         verify_mounted_drive, volume_disk_number, wait_for_drive_state,
     },
-    volume_deletion::{VolumeDeletion, volumes_for_disk},
+    volume_deletion::VolumeDeletion,
     win32::open_device,
 };
 
@@ -95,12 +97,6 @@ fn add_disk(
         timing::mark("wait for disk interface");
         verify_physical_disk_location(disk_number, location)?;
         timing::mark("verify disk identity");
-        #[cfg(debug_assertions)]
-        if std::env::var_os("WISPDISK_TEST_PROVISIONING_FAILURE").as_deref()
-            == Some(std::ffi::OsStr::new("1"))
-        {
-            bail!("injected provisioning failure");
-        }
         initialize_and_format(
             disk_number,
             letter,
@@ -284,108 +280,6 @@ fn disk_location(adapter: &Adapter, entry: &DiskState) -> ScsiLocation {
         target: entry.disk.target_id,
         lun: entry.disk.lun,
     }
-}
-
-#[derive(Serialize)]
-struct InventoryDisk {
-    device_id: u32,
-    state: &'static str,
-    size_bytes: u64,
-    media: &'static str,
-    requested_letter: String,
-    create_operation_id: String,
-    path: u8,
-    target: u8,
-    lun: u8,
-    physical_disk: Option<u32>,
-    mount_points: Option<Vec<String>>,
-}
-#[derive(Serialize)]
-struct InventoryAdapter {
-    adapter_instance: String,
-    port: u8,
-    allocated_bytes: u64,
-    pending_operations: u32,
-    disks: Vec<InventoryDisk>,
-}
-
-fn list_inventory(json: bool) -> Result<()> {
-    let mut inventory = Vec::new();
-    for adapter in adapters() {
-        adapter.require_recovery()?;
-        let state = adapter.state()?;
-        let mut disks = Vec::new();
-        for entry in &state.disks[..state.disk_count as usize] {
-            let number = find_physical_disk(disk_location(&adapter, entry))?;
-            let mounts = number
-                .and_then(|number| volumes_for_disk(number).ok())
-                .map(|volumes| {
-                    volumes
-                        .into_iter()
-                        .flat_map(|volume| volume.mount_points)
-                        .map(|point| String::from_utf16_lossy(&point[..point.len() - 1]))
-                        .collect()
-                });
-            disks.push(InventoryDisk {
-                device_id: entry.disk.device_id,
-                state: match entry.state {
-                    1 => "online",
-                    2 => "stopping",
-                    _ => "unknown",
-                },
-                size_bytes: entry.disk.size_bytes,
-                media: if entry.disk.media_kind == 2 {
-                    "removable"
-                } else {
-                    "fixed"
-                },
-                requested_letter: char::from_u32(u32::from(entry.disk.requested_drive_letter))
-                    .unwrap_or('?')
-                    .to_string(),
-                create_operation_id: entry.create_operation_id.to_string(),
-                path: entry.disk.path_id,
-                target: entry.disk.target_id,
-                lun: entry.disk.lun,
-                physical_disk: number,
-                mount_points: mounts,
-            });
-        }
-        inventory.push(InventoryAdapter {
-            adapter_instance: state.adapter_instance.to_string(),
-            port: adapter.port_number,
-            allocated_bytes: state.allocated_bytes,
-            pending_operations: state.pending_operations,
-            disks,
-        });
-    }
-    if json {
-        println!("{}", serde_json::to_string_pretty(&inventory)?);
-    } else {
-        for adapter in &inventory {
-            println!(
-                "adapter {} (Scsi{}): {} allocated bytes, {} pending operations",
-                adapter.adapter_instance,
-                adapter.port,
-                adapter.allocated_bytes,
-                adapter.pending_operations
-            );
-            for disk in &adapter.disks {
-                println!(
-                    "  id {} {} {} bytes {} requested {}: mounts {:?}",
-                    disk.device_id,
-                    disk.state,
-                    disk.size_bytes,
-                    disk.media,
-                    disk.requested_letter,
-                    disk.mount_points
-                );
-            }
-        }
-        if inventory.is_empty() {
-            println!("no WispDisk adapters");
-        }
-    }
-    Ok(())
 }
 
 fn expected_location(adapter: &Adapter, created: &CreatedDisk) -> ScsiLocation {

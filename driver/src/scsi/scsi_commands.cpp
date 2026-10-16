@@ -1,7 +1,7 @@
 #include "scsi_commands.h"
+#include "adapter_context.h"
 
 #include "scsi_response.h"
-#include "support/scoped_spin_lock.h"
 
 namespace wispdisk::scsi {
 
@@ -12,23 +12,16 @@ constexpr UCHAR kVpdDeviceIdentification = 0x83;
 
 static ULONG BuildLunList(
     _In_ PWISPDISK_ADAPTER_EXTENSION adapter,
-    _Inout_updates_(8 + (WISPDISK_MAXIMUM_DISK_COUNT * 8)) UCHAR* response
-) noexcept {
-    ULONG count = 0;
-    support::ScopedSpinLock lock{&adapter->LunLock};
-    for (const auto& lun : adapter->Luns) {
-        if (lun.State == WispDiskLunState::Online) {
-            response[8 + (count * 8) + 1] = lun.Lun;
-            ++count;
-        }
+    _Inout_updates_(8 + (WISPDISK_MAXIMUM_DISK_COUNT * 8)) UCHAR* response) noexcept {
+    UCHAR luns[kMaximumDiskCount]{};
+    const ULONG count = driver::AdapterContext{*adapter}.Disks().SnapshotOnlineLuns(luns);
+    for (ULONG index = 0; index < count; ++index) {
+        response[8 + (index * 8) + 1] = luns[index];
     }
     return count;
 }
 
-UCHAR HandleInquiry(
-    _In_ const LunView& view,
-    _Inout_ PSCSI_REQUEST_BLOCK srb
-) noexcept {
+UCHAR HandleInquiry(_In_ const LunView& view, _Inout_ PSCSI_REQUEST_BLOCK srb) noexcept {
     if (srb->CdbLength < 6) {
         return SetSense(srb, SCSI_SENSE_ILLEGAL_REQUEST, SCSI_ADSENSE_INVALID_CDB);
     }
@@ -50,9 +43,8 @@ UCHAR HandleInquiry(
         response[3] = 0x02;
         response[4] = 31;
         static constexpr UCHAR vendor[8] = {'W', 'I', 'S', 'P', 'D', 'I', 'S', 'K'};
-        static constexpr UCHAR product[16] = {
-            'V', 'I', 'R', 'T', 'U', 'A', 'L', ' ', 'D', 'I', 'S', 'K', ' ', ' ', ' ', ' '
-        };
+        static constexpr UCHAR product[16] =
+            {'V', 'I', 'R', 'T', 'U', 'A', 'L', ' ', 'D', 'I', 'S', 'K', ' ', ' ', ' ', ' '};
         static constexpr UCHAR revision[4] = {'0', '0', '0', '2'};
         RtlCopyMemory(&response[8], vendor, sizeof(vendor));
         RtlCopyMemory(&response[16], product, sizeof(product));
@@ -97,10 +89,7 @@ UCHAR HandleInquiry(
     return CopyScsiResponse(srb, response, responseLength);
 }
 
-UCHAR HandleReadCapacity10(
-    _In_ const LunView& view,
-    _Inout_ PSCSI_REQUEST_BLOCK srb
-) noexcept {
+UCHAR HandleReadCapacity10(_In_ const LunView& view, _Inout_ PSCSI_REQUEST_BLOCK srb) noexcept {
     UCHAR response[8]{};
     const ULONGLONG blockCount = view.sizeBytes / kLogicalSectorSize;
     const ULONGLONG lastLba = blockCount - 1;
@@ -110,10 +99,7 @@ UCHAR HandleReadCapacity10(
     return CopyScsiResponse(srb, response, sizeof(response));
 }
 
-UCHAR HandleReadCapacity16(
-    _In_ const LunView& view,
-    _Inout_ PSCSI_REQUEST_BLOCK srb
-) noexcept {
+UCHAR HandleReadCapacity16(_In_ const LunView& view, _Inout_ PSCSI_REQUEST_BLOCK srb) noexcept {
     if (srb->CdbLength < 16 || (srb->Cdb[1] & 0x1fU) != SERVICE_ACTION_READ_CAPACITY16) {
         return SetSense(srb, SCSI_SENSE_ILLEGAL_REQUEST, SCSI_ADSENSE_INVALID_CDB);
     }
@@ -173,8 +159,7 @@ UCHAR HandleModeSense(_Inout_ PSCSI_REQUEST_BLOCK srb, _In_ bool tenByte) noexce
 
 UCHAR HandleReportLuns(
     _In_ PWISPDISK_ADAPTER_EXTENSION adapter,
-    _Inout_ PSCSI_REQUEST_BLOCK srb
-) noexcept {
+    _Inout_ PSCSI_REQUEST_BLOCK srb) noexcept {
     if (srb->CdbLength < 12 || srb->PathId != 0 || srb->TargetId != 0) {
         return SetSense(srb, SCSI_SENSE_ILLEGAL_REQUEST, SCSI_ADSENSE_INVALID_CDB);
     }

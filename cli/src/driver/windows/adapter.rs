@@ -1,6 +1,9 @@
 //! Adapter discovery and validated WispDisk miniport protocol requests.
 
-use anyhow::{Result, bail};
+mod reserved_operation;
+
+use self::reserved_operation::ReservedOperation;
+use anyhow::{Context, Result, bail};
 
 use std::{
     ffi::c_void,
@@ -32,6 +35,10 @@ use crate::{
 
 use super::{
     DEVICE_WAIT, RETRY_INTERVAL,
+    control_operation::{
+        ControlOperation, CreateReserved, DeleteReserved, ListState, ProtocolRequest,
+        ProtocolResponse, QueryResult, QueryVersion, ReserveOperation,
+    },
     recovery::{DriverRejection, OperationHandle, UnresolvedOutcome, resolve_operation},
     win32::{OwnedHandle, last_os_error, open_device},
 };
@@ -51,6 +58,23 @@ pub(super) struct CreatedDisk {
     pub lun: u8,
 }
 
+impl TryFrom<OperationResponse> for CreatedDisk {
+    type Error = anyhow::Error;
+
+    fn try_from(response: OperationResponse) -> Result<Self> {
+        if !response.is_valid_created_disk() {
+            bail!("driver returned an invalid created disk identity");
+        }
+        Ok(Self {
+            adapter_instance: response.adapter_instance,
+            device_id: response.device_id,
+            path_id: response.path_id,
+            target_id: response.target_id,
+            lun: response.lun,
+        })
+    }
+}
+
 pub(super) struct Adapter {
     handle: OwnedHandle,
     pub(super) port_number: u8,
@@ -58,8 +82,8 @@ pub(super) struct Adapter {
 
 impl Adapter {
     pub(super) fn query_version(&self) -> Result<QueryVersionResponse> {
-        let request = request_header::<RequestHeader>(Operation::QueryVersion);
-        let response: QueryVersionResponse = self.send(Operation::QueryVersion, &request)?;
+        let request = request_header::<QueryVersion>();
+        let response: QueryVersionResponse = self.send::<QueryVersion>(&request)?;
         if response.version_major != 0 || response.version_minor < 2 {
             bail!(
                 "unsupported loaded driver version {}.{}",
@@ -82,78 +106,40 @@ impl Adapter {
         Ok(())
     }
 
-    pub(super) fn reserve_operation(&self, mutation: Operation) -> Result<OperationHandle> {
+    fn reserve_operation(&self, mutation: Operation) -> Result<OperationHandle> {
         self.require_recovery()?;
         let request = ReserveRequest {
-            header: request_header::<ReserveRequest>(Operation::Reserve),
+            header: request_header::<ReserveOperation>(),
             mutation: mutation as u32,
             reserved: 0,
         };
-        let response: OperationResponse = self.send(Operation::Reserve, &request)?;
-        if response.adapter_instance == 0
-            || response.operation_id == 0
-            || response.mutation != mutation as u32
-            || response.state != 1
-        {
+        let response: OperationResponse = self.send::<ReserveOperation>(&request)?;
+        if response.mutation != mutation as u32 {
             bail!("driver returned an invalid operation reservation");
         }
-        Ok(OperationHandle {
-            instance: response.adapter_instance,
-            id: response.operation_id,
-        })
+        response.try_into()
     }
 
-    pub(super) fn query_operation(&self, handle: OperationHandle) -> Result<OperationResponse> {
-        self.send(
-            Operation::QueryResult,
-            &operation_request::<OperationRequest>(Operation::QueryResult, handle),
-        )
+    fn query_operation(&self, handle: OperationHandle) -> Result<OperationResponse> {
+        self.send::<QueryResult>(&operation_request::<QueryResult>(handle))
     }
 
     pub(super) fn state(&self) -> Result<StateResponse> {
-        let response: StateResponse = self.send(
-            Operation::ListState,
-            &request_header::<RequestHeader>(Operation::ListState),
-        )?;
-        if response.disk_count as usize > response.disks.len() || response.adapter_instance == 0 {
+        let response: StateResponse = self.send::<ListState>(&request_header::<ListState>())?;
+        if !response.is_valid() {
             bail!("driver returned invalid inventory");
         }
         Ok(response)
     }
 
-    fn recover(
+    fn recover<O: ControlOperation<Response = OperationResponse>>(
         &self,
         handle: OperationHandle,
         mutation: Operation,
-        submit: impl FnMut() -> Result<OperationResponse>,
+        request: O::Request,
     ) -> Result<OperationResponse> {
-        let deadline = Instant::now() + DEVICE_WAIT;
-        resolve_operation(
-            handle,
-            mutation,
-            {
-                let mut submit = submit;
-                move || {
-                    crate::timing::measure(
-                        if mutation == Operation::CreateDisk {
-                            "send driver create request"
-                        } else {
-                            "send driver delete request"
-                        },
-                        &mut submit,
-                    )
-                }
-            },
-            || crate::timing::measure("query management outcome", || self.query_operation(handle)),
-            || {
-                let now = Instant::now();
-                if now >= deadline {
-                    return false;
-                }
-                thread::sleep(RETRY_INTERVAL.min(deadline - now));
-                Instant::now() < deadline
-            },
-        )
+        let mut attempt = ReservedOperation::<O>::new(self, handle, mutation, request);
+        resolve_operation(handle, mutation, &mut attempt)
     }
 
     pub(super) fn create_disk(
@@ -164,10 +150,7 @@ impl Adapter {
     ) -> Result<CreatedDisk> {
         let handle = self.reserve_operation(Operation::CreateDisk)?;
         let request = ReservedCreateRequest {
-            operation: operation_request::<ReservedCreateRequest>(
-                Operation::CreateReserved,
-                handle,
-            ),
+            operation: operation_request::<CreateReserved>(handle),
             size_bytes,
             logical_sector_size: LOGICAL_SECTOR_SIZE,
             media_kind: match media {
@@ -178,26 +161,8 @@ impl Adapter {
             reserved16: 0,
             reserved32: 0,
         };
-        let response = self.recover(handle, Operation::CreateDisk, || {
-            self.send(Operation::CreateReserved, &request)
-        })?;
-        if response.device_id == 0
-            || response.path_id != 0
-            || response.target_id != 0
-            || response.lun as usize >= MAXIMUM_DISK_COUNT
-        {
-            return Err(
-                anyhow::anyhow!("driver returned an invalid created disk identity")
-                    .context(UnresolvedOutcome(handle)),
-            );
-        }
-        Ok(CreatedDisk {
-            adapter_instance: response.adapter_instance,
-            device_id: response.device_id,
-            path_id: response.path_id,
-            target_id: response.target_id,
-            lun: response.lun,
-        })
+        let response = self.recover::<CreateReserved>(handle, Operation::CreateDisk, request)?;
+        CreatedDisk::try_from(response).context(UnresolvedOutcome(handle))
     }
 
     pub(super) fn delete_by_id(&self, instance: u64, device_id: u32) -> Result<()> {
@@ -206,16 +171,11 @@ impl Adapter {
             bail!("adapter changed before deletion; refusing stale device ID {device_id}");
         }
         let request = ReservedDeleteRequest {
-            operation: operation_request::<ReservedDeleteRequest>(
-                Operation::DeleteReserved,
-                handle,
-            ),
+            operation: operation_request::<DeleteReserved>(handle),
             device_id,
             reserved: 0,
         };
-        self.recover(handle, Operation::DeleteDisk, || {
-            self.send(Operation::DeleteReserved, &request)
-        })?;
+        self.recover::<DeleteReserved>(handle, Operation::DeleteDisk, request)?;
         let state = self
             .state()
             .map_err(|error| error.context(UnresolvedOutcome(handle)))?;
@@ -234,37 +194,39 @@ impl Adapter {
         Ok(())
     }
 
-    fn send<Request: Copy, Response: Copy + HasResponseHeader>(
-        &self,
-        operation: Operation,
-        request: &Request,
-    ) -> Result<Response> {
-        if size_of::<SRB_IO_CONTROL>() + size_of::<Response>() > CONTROL_BUFFER_SIZE {
-            bail!("internal IOCTL buffer is too small for the protocol response");
+    fn send<O: ControlOperation>(&self, request: &O::Request) -> Result<O::Response> {
+        if size_of::<SRB_IO_CONTROL>() + size_of::<O::Response>() > CONTROL_BUFFER_SIZE
+            || size_of::<SRB_IO_CONTROL>() + size_of::<O::Request>() > CONTROL_BUFFER_SIZE
+        {
+            bail!("internal IOCTL buffer is too small for the protocol message");
         }
 
         let mut storage = [0_u64; CONTROL_BUFFER_SIZE / size_of::<u64>()];
         let buffer = storage.as_mut_ptr().cast::<u8>();
-        let correlation_id = request_correlation_id(request)?;
+        let correlation_id = request.request_header().correlation_id;
         let control = SRB_IO_CONTROL {
             HeaderLength: size_of::<SRB_IO_CONTROL>() as u32,
             Signature: SRB_SIGNATURE,
             Timeout: CONTROL_TIMEOUT_SECONDS,
-            ControlCode: operation as u32,
+            ControlCode: O::CODE as u32,
             ReturnCode: 0,
             Length: (CONTROL_BUFFER_SIZE - size_of::<SRB_IO_CONTROL>()) as u32,
         };
+        // SAFETY: storage is aligned for SRB_IO_CONTROL and both writes fit the
+        // checked buffer. ProtocolRequest guarantees initialized wire bytes.
         unsafe {
             buffer.cast::<SRB_IO_CONTROL>().write(control);
             buffer
                 .add(size_of::<SRB_IO_CONTROL>())
                 .copy_from_nonoverlapping(
-                    request as *const Request as *const u8,
-                    size_of::<Request>(),
+                    request as *const O::Request as *const u8,
+                    size_of::<O::Request>(),
                 );
         }
 
         let mut returned = 0;
+        // SAFETY: the owned handle remains live and the synchronous call uses
+        // the same writable buffer for input and output for its full duration.
         let result = unsafe {
             DeviceIoControl(
                 self.handle.0,
@@ -284,6 +246,8 @@ impl Adapter {
             bail!("driver returned a truncated control response ({returned} bytes)");
         }
 
+        // SAFETY: the minimum returned length was checked above. These wire
+        // headers contain only integers; the payload need not be aligned.
         let returned_control = unsafe { buffer.cast::<SRB_IO_CONTROL>().read() };
         let header = unsafe {
             buffer
@@ -291,82 +255,48 @@ impl Adapter {
                 .cast::<ResponseHeader>()
                 .read_unaligned()
         };
-        validate_response_header(operation, correlation_id, &returned_control, &header)?;
-        if returned < (size_of::<SRB_IO_CONTROL>() + size_of::<Response>()) as u32
-            || returned_control.Length < size_of::<Response>() as u32
+        validate_response_header(O::CODE, correlation_id, &returned_control, &header)?;
+        if returned < (size_of::<SRB_IO_CONTROL>() + size_of::<O::Response>()) as u32
+            || returned_control.Length < size_of::<O::Response>() as u32
         {
             bail!("driver returned a shorter response than its success header promised");
         }
+        // SAFETY: response length and buffer capacity were checked above.
+        // ProtocolResponse guarantees all bit patterns are valid for this type.
         let response = unsafe {
             buffer
                 .add(size_of::<SRB_IO_CONTROL>())
-                .cast::<Response>()
+                .cast::<O::Response>()
                 .read_unaligned()
         };
         let response_header = response.response_header();
-        if response_header.struct_size != size_of::<Response>() as u32 {
+        if response_header.struct_size != size_of::<O::Response>() as u32 {
             bail!(
                 "driver returned an unexpected response size {} (expected {})",
                 response_header.struct_size,
-                size_of::<Response>()
+                size_of::<O::Response>()
             );
         }
         Ok(response)
     }
 }
 
-trait HasResponseHeader {
-    fn response_header(&self) -> &ResponseHeader;
-}
-
-macro_rules! response_header {
-    ($type:ty, $field:ident) => {
-        impl HasResponseHeader for $type {
-            fn response_header(&self) -> &ResponseHeader {
-                &self.$field
-            }
-        }
-    };
-}
-
-impl HasResponseHeader for ResponseHeader {
-    fn response_header(&self) -> &ResponseHeader {
-        self
-    }
-}
-
-response_header!(QueryVersionResponse, header);
-response_header!(OperationResponse, header);
-response_header!(StateResponse, header);
-
-fn request_header<T>(operation: Operation) -> RequestHeader {
+fn request_header<O: ControlOperation>() -> RequestHeader {
     RequestHeader {
-        struct_size: size_of::<T>() as u32,
+        struct_size: size_of::<O::Request>() as u32,
         protocol_version: PROTOCOL_VERSION,
-        operation: operation as u32,
+        operation: O::CODE as u32,
         flags: 0,
         correlation_id: NEXT_CORRELATION_ID.fetch_add(1, Ordering::Relaxed),
     }
 }
 
-fn operation_request<T>(operation: Operation, handle: OperationHandle) -> OperationRequest {
+fn operation_request<O: ControlOperation>(handle: OperationHandle) -> OperationRequest {
     OperationRequest {
-        header: request_header::<T>(operation),
+        header: request_header::<O>(),
         adapter_instance: handle.instance,
         operation_id: handle.id,
     }
-}
-
-fn request_correlation_id<T: Copy>(request: &T) -> Result<u64> {
-    if size_of::<T>() < size_of::<RequestHeader>() {
-        bail!("internal protocol request is smaller than its header");
-    }
-    let header = unsafe {
-        (request as *const T)
-            .cast::<RequestHeader>()
-            .read_unaligned()
-    };
-    Ok(header.correlation_id)
 }
 
 fn validate_response_header(
@@ -429,7 +359,7 @@ pub(super) fn wait_for_adapter(timeout: Duration) -> Result<Adapter> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{CreateRequest, CreateResponse};
+    use crate::protocol::CreateResponse;
 
     fn successful_response<Response>(
         operation: Operation,
@@ -530,17 +460,13 @@ mod tests {
 
     #[test]
     fn request_headers_preserve_layout_and_unique_correlation_ids() {
-        let first = request_header::<CreateRequest>(Operation::CreateDisk);
-        let second = request_header::<CreateRequest>(Operation::CreateDisk);
-        assert_eq!(first.struct_size, size_of::<CreateRequest>() as u32);
+        let first = request_header::<CreateReserved>();
+        let second = request_header::<CreateReserved>();
+        assert_eq!(first.struct_size, size_of::<ReservedCreateRequest>() as u32);
         assert_eq!(first.protocol_version, PROTOCOL_VERSION);
-        assert_eq!(first.operation, Operation::CreateDisk as u32);
+        assert_eq!(first.operation, Operation::CreateReserved as u32);
         assert_eq!(first.flags, 0);
         assert_ne!(first.correlation_id, second.correlation_id);
-        assert_eq!(
-            request_correlation_id(&first).unwrap(),
-            first.correlation_id
-        );
-        assert!(request_correlation_id(&0_u32).is_err());
+        assert_eq!(first.request_header().correlation_id, first.correlation_id);
     }
 }

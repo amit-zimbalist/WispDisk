@@ -187,6 +187,36 @@ pub struct OperationResponse {
     pub reserved32: u32,
 }
 
+impl OperationResponse {
+    // These checks validate payload meaning; the transport validates the wire
+    // header and recovery matches the response to the original request.
+    pub fn is_valid_reservation(&self) -> bool {
+        self.adapter_instance != 0
+            && self.operation_id != 0
+            && (self.mutation == Operation::CreateDisk as u32
+                || self.mutation == Operation::DeleteDisk as u32)
+            && self.state == OperationState::Reserved as u32
+    }
+
+    pub fn matches_operation(&self, instance: u64, id: u64, mutation: Operation) -> bool {
+        self.adapter_instance == instance
+            && self.operation_id == id
+            && self.mutation == mutation as u32
+    }
+
+    pub fn is_valid_created_disk(&self) -> bool {
+        self.adapter_instance != 0
+            && self.operation_id != 0
+            && self.mutation == Operation::CreateDisk as u32
+            && self.state == OperationState::Succeeded as u32
+            && self.result_status == 0
+            && self.device_id != 0
+            && self.path_id == 0
+            && self.target_id == 0
+            && (self.lun as usize) < MAXIMUM_DISK_COUNT
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DiskState {
@@ -205,6 +235,12 @@ pub struct StateResponse {
     pub disk_count: u32,
     pub pending_operations: u32,
     pub disks: [DiskState; MAXIMUM_DISK_COUNT],
+}
+
+impl StateResponse {
+    pub fn is_valid(&self) -> bool {
+        self.adapter_instance != 0 && (self.disk_count as usize) <= self.disks.len()
+    }
 }
 
 const _: [(); 32] = [(); size_of::<ReserveRequest>()];

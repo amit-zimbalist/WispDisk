@@ -6,15 +6,14 @@ namespace wispdisk::scsi {
 
 static bool ParseReadWriteCdb(
     _In_ PSCSI_REQUEST_BLOCK srb,
-    _Out_ ULONGLONG* logicalBlock,
-    _Out_ ULONG* blockCount,
-    _Out_ bool* isWrite
-) noexcept {
+    _Out_ ULONGLONG& logicalBlock,
+    _Out_ ULONG& blockCount,
+    _Out_ bool& isWrite) noexcept {
     const UCHAR operation = srb->Cdb[0];
-    *logicalBlock = 0;
-    *blockCount = 0;
-    *isWrite = operation == SCSIOP_WRITE6 || operation == SCSIOP_WRITE ||
-               operation == SCSIOP_WRITE12 || operation == SCSIOP_WRITE16;
+    logicalBlock = 0;
+    blockCount = 0;
+    isWrite = operation == SCSIOP_WRITE6 || operation == SCSIOP_WRITE ||
+              operation == SCSIOP_WRITE12 || operation == SCSIOP_WRITE16;
 
     switch (operation) {
         case SCSIOP_READ6:
@@ -22,10 +21,9 @@ static bool ParseReadWriteCdb(
             if (srb->CdbLength < 6) {
                 return false;
             }
-            *logicalBlock = (static_cast<ULONGLONG>(srb->Cdb[1] & 0x1fU) << 16) |
-                            (static_cast<ULONGLONG>(srb->Cdb[2]) << 8) |
-                            srb->Cdb[3];
-            *blockCount = srb->Cdb[4] == 0 ? 256 : srb->Cdb[4];
+            logicalBlock = (static_cast<ULONGLONG>(srb->Cdb[1] & 0x1fU) << 16) |
+                           (static_cast<ULONGLONG>(srb->Cdb[2]) << 8) | srb->Cdb[3];
+            blockCount = srb->Cdb[4] == 0 ? 256 : srb->Cdb[4];
             return true;
 
         case SCSIOP_READ:
@@ -33,8 +31,8 @@ static bool ParseReadWriteCdb(
             if (srb->CdbLength < 10) {
                 return false;
             }
-            *logicalBlock = ReadBigEndian32(&srb->Cdb[2]);
-            *blockCount = (static_cast<ULONG>(srb->Cdb[7]) << 8) | srb->Cdb[8];
+            logicalBlock = ReadBigEndian32(&srb->Cdb[2]);
+            blockCount = (static_cast<ULONG>(srb->Cdb[7]) << 8) | srb->Cdb[8];
             return true;
 
         case SCSIOP_READ12:
@@ -42,8 +40,8 @@ static bool ParseReadWriteCdb(
             if (srb->CdbLength < 12) {
                 return false;
             }
-            *logicalBlock = ReadBigEndian32(&srb->Cdb[2]);
-            *blockCount = ReadBigEndian32(&srb->Cdb[6]);
+            logicalBlock = ReadBigEndian32(&srb->Cdb[2]);
+            blockCount = ReadBigEndian32(&srb->Cdb[6]);
             return true;
 
         case SCSIOP_READ16:
@@ -51,8 +49,8 @@ static bool ParseReadWriteCdb(
             if (srb->CdbLength < 16) {
                 return false;
             }
-            *logicalBlock = ReadBigEndian64(&srb->Cdb[2]);
-            *blockCount = ReadBigEndian32(&srb->Cdb[10]);
+            logicalBlock = ReadBigEndian64(&srb->Cdb[2]);
+            blockCount = ReadBigEndian32(&srb->Cdb[10]);
             return true;
 
         default:
@@ -60,14 +58,11 @@ static bool ParseReadWriteCdb(
     }
 }
 
-UCHAR HandleReadWrite(
-    _In_ const LunView& view,
-    _Inout_ PSCSI_REQUEST_BLOCK srb
-) noexcept {
+UCHAR HandleReadWrite(_In_ const LunView& view, _Inout_ PSCSI_REQUEST_BLOCK srb) noexcept {
     ULONGLONG logicalBlock = 0;
     ULONG blockCount = 0;
     bool isWrite = false;
-    if (!ParseReadWriteCdb(srb, &logicalBlock, &blockCount, &isWrite)) {
+    if (!ParseReadWriteCdb(srb, logicalBlock, blockCount, isWrite)) {
         return SetSense(srb, SCSI_SENSE_ILLEGAL_REQUEST, SCSI_ADSENSE_INVALID_CDB);
     }
 

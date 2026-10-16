@@ -1,0 +1,26 @@
+BasedOnStyle: LLVM
+IndentWidth: 4
+ContinuationIndentWidth: 4
+AccessModifierOffset: -4
+ColumnLimit: 100
+IndentCaseLabels: true
+NamespaceIndentation: None
+BreakBeforeBraces: Attach
+PointerAlignment: Left
+DerivePointerAlignment: false
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+InsertBraces: true
+SortIncludes: Never
+BinPackArguments: false
+BinPackParameters: false
+AlignAfterOpenBracket: AlwaysBreak
+AllowAllArgumentsOnNextLine: false
+AllowAllParametersOfDeclarationOnNextLine: false
+StatementMacros:
+  - _Use_decl_annotations_
+  - _IRQL_requires_
+  - _IRQL_requires_max_
+LineEnding: LF

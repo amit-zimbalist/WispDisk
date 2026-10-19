@@ -16,6 +16,8 @@ the C++ driver.
   500 lines is a reason to review its boundaries, not an automatic line limit.
 - Give substantial components their own files. For example,
   `DiskInterfaceNotification` belongs in a dedicated module.
+- Declare structs and classes at module/file or namespace scope, never inside
+  functions or methods. This includes resource guards and helper types.
 - Organize directories around coherent responsibilities. Avoid both
   catch-all modules and excessive fragmentation.
 - Put operations on a type when they naturally use its state, identity,
@@ -23,6 +25,8 @@ the C++ driver.
 - Use focused collaborating types when one class accumulates multiple
   responsibilities. Each type should expose a clear API and hide its
   internal bookkeeping.
+- Keep multi-resource coordination separate from per-resource operations, with
+  distinct responsibility-based names such as `DiskDeletion` and `Volume`.
 - Prefer named helper functions over standalone brace blocks introduced
   only to control resource or lock lifetime. Preserve the narrow lifetime
   when extracting the helper.
@@ -34,7 +38,12 @@ the C++ driver.
 
 - Use RAII in C++ and ownership with `Drop` in Rust for resources that
   have a well-defined owner and reliable cleanup operation.
-- Keep resource wrappers small, focused, and reusable.
+- Keep resource wrappers small, focused, and reusable. Acquire and validate
+  resources in constructors or fallible factories, expose operations as methods,
+  and release owned resources in destructors or `Drop`, including on early returns.
+- Enumeration types should own their native handle, buffers, and iteration state.
+  Keep advancing, end-of-enumeration detection, and error handling inside the type;
+  use standard iterator interfaces where appropriate.
 - Use RAII for owned resources or scoped obligations. Keep their lifetimes
   narrow and prevent copies that would duplicate cleanup.
 - Distinguish owning objects from borrowed views. A borrowed view must

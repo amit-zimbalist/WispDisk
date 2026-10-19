@@ -53,6 +53,7 @@ wispdisk.exe /add /hdd /letter R /size 128MiB
 wispdisk.exe /add /rem /letter:S /size:64MiB /fs:FAT32
 wispdisk.exe /add /hdd /letter T /size 32MiB /fs FAT
 wispdisk.exe /del /letter R
+wispdisk.exe /del /letter R /force
 wispdisk.exe /list /json
 wispdisk.exe /del /adapter <INSTANCE-FROM-LIST> /id <DEVICE-ID>
 ```
@@ -63,6 +64,8 @@ Rules enforced now:
 - exactly one of `/hdd` and `/rem` for `/add`;
 - `/letter` is required for creation; deletion takes either `/letter` or both
   `/adapter` and `/id` from inventory;
+- `/force` is valid only with `/del` and permits dismounting when volume locking
+  fails; open files may become invalid and unsaved data may be lost;
 - `/size` is required only for `/add`, is from 16 MiB through 256 MiB, and is
   512-byte aligned;
 - `/fs` is valid only for `/add`, accepts `FAT`, `FAT32`, or `NTFS`
@@ -79,8 +82,13 @@ mount points (null when unavailable), allocated bytes, and pending mutations.
 Adapter instance and operation IDs are JSON strings to preserve their full
 64-bit precision. Listing does not install an adapter. Delete by ID discovers
 and locks/dismounts all volumes on that disk, including volumes without letters.
-Open files still cause deletion to fail safely. There is no implicit force or
-purge. Adapter instances change on reinstallation; stale identities are rejected.
+Open files cause deletion to fail safely unless `/force` is explicitly supplied
+with either deletion form. With `/force`, the CLI still tries to lock every
+volume, prints a warning to stderr for each lock failure, and attempts dismounting
+without that lock. The flag acknowledges the risk without an interactive prompt.
+Dismount, identity verification, mount removal, and driver errors still fail the
+operation. Failed creation rollback always uses deletion without force.
+Adapter instances change on reinstallation; stale identities are rejected.
 
 The 0.3 CLI requires a driver advertising operation recovery before mutation.
 An older loaded driver must be upgraded explicitly. Ambiguous create/delete

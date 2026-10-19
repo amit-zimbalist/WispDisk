@@ -120,8 +120,14 @@ fn volume_paths(name: &[u16]) -> Result<Vec<Vec<u16>>> {
     Ok(result)
 }
 
+struct DeletionVolume {
+    volume: DiskVolume,
+    handle: OwnedHandle,
+    locked: bool,
+}
+
 pub(super) struct VolumeDeletion {
-    volumes: Vec<(DiskVolume, OwnedHandle)>,
+    volumes: Vec<DeletionVolume>,
     removed: Vec<(Vec<u16>, Vec<u16>)>,
 }
 
@@ -137,7 +143,11 @@ impl VolumeDeletion {
             if volume_disk_number(&handle)? != number {
                 bail!("volume changed disk identity before deletion");
             }
-            volumes.push((volume, handle));
+            volumes.push(DeletionVolume {
+                volume,
+                handle,
+                locked: false,
+            });
         }
         verify_physical_disk_location(number, location)?;
         Ok(Self {
@@ -146,34 +156,51 @@ impl VolumeDeletion {
         })
     }
 
-    pub(super) fn lock(&self) -> Result<()> {
-        for (_, handle) in &self.volumes {
-            volume_control(handle, FSCTL_LOCK_VOLUME, "lock target volume")?;
+    pub(super) fn lock(&mut self, force: bool) -> Result<()> {
+        for target in &mut self.volumes {
+            match volume_control(&target.handle, FSCTL_LOCK_VOLUME, "lock target volume") {
+                Ok(()) => target.locked = true,
+                Err(error) if force => {
+                    let name = String::from_utf16_lossy(
+                        &target.volume.name[..target.volume.name.len() - 1],
+                    );
+                    eprintln!(
+                        "warning: could not lock volume {name}: {error:#}; /force will attempt to dismount it. Open files may become invalid and unsaved data may be lost."
+                    );
+                }
+                Err(error) => return Err(error),
+            }
         }
         Ok(())
     }
 
     pub(super) fn dismount(&self) -> Result<()> {
-        for (_, handle) in &self.volumes {
-            volume_control(handle, FSCTL_DISMOUNT_VOLUME, "dismount target volume")?;
+        for target in &self.volumes {
+            volume_control(
+                &target.handle,
+                FSCTL_DISMOUNT_VOLUME,
+                "dismount target volume",
+            )?;
         }
         Ok(())
     }
 
     pub(super) fn remove_mounts(&mut self) -> Result<()> {
-        for (volume, _) in &self.volumes {
-            for point in &volume.mount_points {
+        for target in &self.volumes {
+            for point in &target.volume.mount_points {
                 if unsafe { DeleteVolumeMountPointW(point.as_ptr()) } == 0 {
                     return Err(last_os_error("remove volume mount point"));
                 }
-                self.removed.push((point.clone(), volume.name.clone()));
+                self.removed
+                    .push((point.clone(), target.volume.name.clone()));
             }
         }
         Ok(())
     }
     pub(super) fn restore(&self) -> Result<()> {
         let mut failure = None;
-        for (volume, handle) in &self.volumes {
+        for target in &self.volumes {
+            let volume = &target.volume;
             let points: Vec<_> = self
                 .removed
                 .iter()
@@ -185,10 +212,10 @@ impl VolumeDeletion {
             }
             let count = points.len();
             for (index, (point, _)) in points.into_iter().enumerate() {
-                // Restore all paths while the volume remains locked, then
-                // unlock once. A volume may have both a letter and directories.
-                let restoration = if index + 1 == count {
-                    restore_mount_and_unlock(handle, point, &volume.name)
+                // A forced dismount may not own a lock. Restore all paths,
+                // then release only a lock this deletion actually acquired.
+                let restoration = if index + 1 == count && target.locked {
+                    restore_mount_and_unlock(&target.handle, point, &volume.name)
                 } else if unsafe { SetVolumeMountPointW(point.as_ptr(), volume.name.as_ptr()) } == 0
                 {
                     Err(last_os_error("restore volume mount point"))
@@ -209,5 +236,63 @@ impl VolumeDeletion {
             Some(error) => Err(error),
             None => Ok(()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows_sys::Win32::System::Threading::CreateEventW;
+
+    fn non_volume_deletion() -> VolumeDeletion {
+        // An event gives DeviceIoControl a valid, owned non-volume handle.
+        // These tests cannot lock or dismount a real filesystem.
+        let handle = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
+        assert!(!handle.is_null());
+        VolumeDeletion {
+            volumes: vec![DeletionVolume {
+                volume: DiskVolume {
+                    name: "test-volume\0".encode_utf16().collect(),
+                    mount_points: Vec::new(),
+                },
+                handle: OwnedHandle(handle),
+                locked: false,
+            }],
+            removed: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn lock_failure_aborts_normal_deletion() {
+        let mut deletion = non_volume_deletion();
+        assert!(deletion.lock(false).is_err());
+        assert!(!deletion.volumes[0].locked);
+    }
+
+    #[test]
+    fn force_bypasses_lock_failure_but_not_dismount_failure() {
+        let mut deletion = non_volume_deletion();
+        deletion.lock(true).unwrap();
+        assert!(!deletion.volumes[0].locked);
+        let error = deletion.dismount().unwrap_err();
+        assert!(error.downcast_ref::<io::Error>().is_some());
+        assert!(format!("{error:#}").starts_with("dismount target volume:"));
+    }
+
+    #[test]
+    fn restoration_only_attempts_to_release_an_acquired_lock() {
+        let mut deletion = non_volume_deletion();
+        // Neither the empty mount point nor the synthetic volume name can
+        // identify a real mount. Restoration must fail without changing one.
+        deletion
+            .removed
+            .push((vec![0], deletion.volumes[0].volume.name.clone()));
+        let error = deletion.restore().unwrap_err();
+        assert!(format!("{error:#}").starts_with("restore volume mount point:"));
+        assert!(!format!("{error:#}").contains("unlock"));
+
+        deletion.volumes[0].locked = true;
+        let error = deletion.restore().unwrap_err();
+        assert!(format!("{error:#}").contains("unlock also failed"));
     }
 }

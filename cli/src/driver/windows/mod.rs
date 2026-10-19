@@ -57,8 +57,8 @@ pub(super) fn execute(command: &Command) -> Result<()> {
             size_bytes,
             file_system,
         } => add_disk(*letter, *media, *size_bytes, *file_system),
-        Command::Delete { letter } => delete_disk(*letter),
-        Command::DeleteId { adapter, id } => delete_by_identity(*adapter, *id),
+        Command::Delete { letter, force } => delete_disk(*letter, *force),
+        Command::DeleteId { adapter, id, force } => delete_by_identity(*adapter, *id, *force),
         Command::List { json } => list_inventory(*json),
     }
 }
@@ -127,7 +127,7 @@ fn add_disk(
         );
         let deadline = std::time::Instant::now() + DEVICE_WAIT;
         let rollback = loop {
-            match delete_allocation(&adapter, created.adapter_instance, created.device_id) {
+            match delete_allocation(&adapter, created.adapter_instance, created.device_id, false) {
                 Err(error)
                     if volume::is_lock_refusal(&error) && std::time::Instant::now() < deadline =>
                 {
@@ -158,7 +158,7 @@ fn add_disk(
     Ok(())
 }
 
-fn delete_disk(letter: DriveLetter) -> Result<()> {
+fn delete_disk(letter: DriveLetter, force: bool) -> Result<()> {
     if !drive_letter_in_use(letter) {
         bail!("drive {letter} is not mounted");
     }
@@ -196,13 +196,13 @@ fn delete_disk(letter: DriveLetter) -> Result<()> {
         }
     }
     let (_, instance, id) = matched.context("volume is not uniquely owned by WispDisk")?;
-    delete_by_identity(instance, id)?;
+    delete_by_identity(instance, id, force)?;
     info!(%letter, "Wait for drive-letter disappearance");
     wait_for_drive_state(letter, false, DEVICE_WAIT)?;
     Ok(())
 }
 
-fn delete_by_identity(instance: u64, id: u32) -> Result<()> {
+fn delete_by_identity(instance: u64, id: u32, force: bool) -> Result<()> {
     let mut matched = None;
     for adapter in adapters() {
         adapter.require_recovery()?;
@@ -215,12 +215,12 @@ fn delete_by_identity(instance: u64, id: u32) -> Result<()> {
     }
     let adapter =
         matched.context("adapter instance is absent or stale; refresh /list before deletion")?;
-    delete_allocation(&adapter, instance, id)?;
+    delete_allocation(&adapter, instance, id, force)?;
     println!("deleted WispDisk device {id} (adapter instance {instance})");
     Ok(())
 }
 
-fn delete_allocation(adapter: &Adapter, instance: u64, id: u32) -> Result<()> {
+fn delete_allocation(adapter: &Adapter, instance: u64, id: u32, force: bool) -> Result<()> {
     info!(
         adapter_instance = instance,
         device_id = id,
@@ -243,7 +243,7 @@ fn delete_allocation(adapter: &Adapter, instance: u64, id: u32) -> Result<()> {
     let mut volumes = VolumeDeletion::open(number, location)?;
     let prepared = (|| {
         info!(disk_number = number, "Lock target volumes");
-        volumes.lock()?;
+        volumes.lock(force)?;
         info!(disk_number = number, "Dismount target volumes");
         volumes.dismount()?;
         info!(disk_number = number, "Remove volume mount points");

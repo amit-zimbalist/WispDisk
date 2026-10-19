@@ -84,8 +84,10 @@ Adapter instance and operation IDs are JSON strings to preserve their full
 and locks/dismounts all volumes on that disk, including volumes without letters.
 Open files cause deletion to fail safely unless `/force` is explicitly supplied
 with either deletion form. With `/force`, the CLI still tries to lock every
-volume, prints a warning to stderr for each lock failure, and attempts dismounting
-without that lock. The flag acknowledges the risk without an interactive prompt.
+volume, logs a tracing warning for each lock failure, and attempts dismounting
+without that lock. Warnings follow the selected `/log` level and appear on stdout;
+use `/log warn` to display them. Logging is disabled by default. The flag
+acknowledges the risk without an interactive prompt.
 Dismount, identity verification, mount removal, and driver errors still fail the
 operation. Failed creation rollback always uses deletion without force.
 Adapter instances change on reinstallation; stale identities are rejected.

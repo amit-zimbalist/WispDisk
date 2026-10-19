@@ -7,6 +7,7 @@ use super::{
 };
 use anyhow::{Context, Result, bail};
 use std::{io, ptr::null_mut};
+use tracing::warn;
 use windows_sys::Win32::{
     Foundation::{
         ERROR_MORE_DATA, ERROR_NO_MORE_FILES, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE,
@@ -161,11 +162,12 @@ impl VolumeDeletion {
             match volume_control(&target.handle, FSCTL_LOCK_VOLUME, "lock target volume") {
                 Ok(()) => target.locked = true,
                 Err(error) if force => {
-                    let name = String::from_utf16_lossy(
-                        &target.volume.name[..target.volume.name.len() - 1],
-                    );
-                    eprintln!(
-                        "warning: could not lock volume {name}: {error:#}; /force will attempt to dismount it. Open files may become invalid and unsaved data may be lost."
+                    warn!(
+                        volume = %String::from_utf16_lossy(
+                            &target.volume.name[..target.volume.name.len() - 1],
+                        ),
+                        error = %format_args!("{error:#}"),
+                        "Could not lock target volume; /force will attempt to dismount it. Open files may become invalid and unsaved data may be lost."
                     );
                 }
                 Err(error) => return Err(error),

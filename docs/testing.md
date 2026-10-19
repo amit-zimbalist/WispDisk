@@ -52,8 +52,9 @@ for FAT, FAT32, and NTFS, with both fixed and removable disks:
 
 - `/del /letter <LETTER>` must fail to lock, leave the allocation online, and
   preserve its mount points.
-- `/del /letter <LETTER> /force` must warn on stderr even without `/log`, attempt
+- `/del /letter <LETTER> /force /log warn` must log a warning on stdout, attempt
   dismounting, and remove the allocation and its Windows disk/volume devices.
+  Repeat without `/log` to confirm deletion succeeds without a log warning.
   Existing application handles may fail after dismounting.
 - Repeat using `/del /adapter <INSTANCE> /id <ID> /force`, including a volume
   without a drive letter and a disk with multiple volumes, some busy and some idle.

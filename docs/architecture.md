@@ -182,8 +182,8 @@ by its current `PhysicalDriveN` number.
    match that address uniquely against the driver's live-LUN list to recover the
    stable WispDisk device ID.
 2. Try to lock every target volume before dismounting. Normally a lock failure
-   refuses deletion. With explicit `/del /force`, warn on stderr and attempt to
-   dismount even if locking fails; open files may become invalid and unsaved data
+   refuses deletion. With explicit `/del /force`, log a tracing warning and
+   attempt to dismount even if locking fails; open files may become invalid and unsaved data
    may be lost. Dismount errors still refuse deletion. Retain volume handles
    through the driver deletion and track which locks were acquired for recovery.
 3. Remove the mount point.

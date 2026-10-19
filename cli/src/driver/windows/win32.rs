@@ -5,9 +5,9 @@ use anyhow::{Error, Result};
 use std::{
     ffi::OsStr,
     io,
-    os::windows::ffi::OsStrExt,
     ptr::{null, null_mut},
 };
+use widestring::{U16CStr, U16CString};
 
 use windows_sys::{
     Win32::{
@@ -52,17 +52,11 @@ impl Drop for OwnedHandle {
 }
 
 pub(super) fn open_device(path: &str, access: u32) -> io::Result<OwnedHandle> {
-    let path = wide(OsStr::new(path));
+    let path = wide(OsStr::new(path))?;
     open_device_wide(&path, access)
 }
 
-pub(super) fn open_device_wide(path: &[u16], access: u32) -> io::Result<OwnedHandle> {
-    if path.last() != Some(&0) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "device path is not null terminated",
-        ));
-    }
+pub(super) fn open_device_wide(path: &U16CStr, access: u32) -> io::Result<OwnedHandle> {
     let handle = unsafe {
         CreateFileW(
             path.as_ptr(),
@@ -81,8 +75,9 @@ pub(super) fn open_device_wide(path: &[u16], access: u32) -> io::Result<OwnedHan
     }
 }
 
-pub(super) fn wide(value: &OsStr) -> Vec<u16> {
-    value.encode_wide().chain(Some(0)).collect()
+pub(super) fn wide(value: &OsStr) -> io::Result<U16CString> {
+    U16CString::from_os_str(value)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
 }
 
 pub(super) fn last_os_error(operation: &str) -> Error {
@@ -94,16 +89,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rejects_unterminated_device_paths_before_calling_windows() {
-        for path in [&[][..], &[b'A' as u16][..]] {
-            let error = open_device_wide(path, 0).err().expect("invalid path");
+    fn rejects_embedded_nuls_in_device_paths_before_calling_windows() {
+        for path in ["\0A", "A\0B"] {
+            let error = open_device(path, 0).err().expect("invalid path");
             assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
         }
     }
 
     #[test]
     fn encodes_null_terminated_utf16() {
-        assert_eq!(wide(OsStr::new("A😀")), [65, 0xD83D, 0xDE00, 0]);
+        assert_eq!(
+            wide(OsStr::new("A😀")).unwrap().as_slice_with_nul(),
+            [65, 0xD83D, 0xDE00, 0]
+        );
+    }
+
+    #[test]
+    fn preserves_unpaired_surrogates_in_windows_paths() {
+        use std::{ffi::OsString, os::windows::ffi::OsStringExt};
+
+        let units = [b'A' as u16, 0xD800, b'B' as u16];
+        let path = OsString::from_wide(&units);
+        assert_eq!(wide(&path).unwrap().as_slice(), units);
     }
 
     #[test]

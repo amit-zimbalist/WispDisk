@@ -165,7 +165,7 @@ fn delete_disk(letter: DriveLetter, force: bool) -> Result<()> {
         bail!("drive {letter} is not mounted");
     }
     info!(%letter, "Resolve disk identity");
-    let _name = get_volume_name(&mount_point(letter))?;
+    let _name = get_volume_name(&mount_point(letter)?)?;
     let volume = open_device(
         &format!(r"\\.\{}:", char::from(letter.as_ascii())),
         GENERIC_READ,

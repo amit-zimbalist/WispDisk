@@ -153,7 +153,7 @@ fn discover_mount_points(number: u32) -> Option<Vec<String>> {
         volumes
             .into_iter()
             .flat_map(|volume| volume.mount_points)
-            .map(|point| String::from_utf16_lossy(&point[..point.len() - 1]))
+            .map(|point| point.to_string_lossy())
             .collect(),
     )
 }

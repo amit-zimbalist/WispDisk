@@ -1,29 +1,26 @@
 //! Discover volume names and mount points without requiring write access.
 use super::{
-    volume::volume_disk_number,
+    volume::{volume_device_path, volume_disk_number},
     volume_finder::VolumeFinder,
     win32::{last_os_error, open_device_wide},
 };
 use anyhow::{Context, Result};
 use std::{io, ptr::null_mut};
+use widestring::{U16CStr, U16CString};
 use windows_sys::Win32::{
     Foundation::ERROR_MORE_DATA, Storage::FileSystem::GetVolumePathNamesForVolumeNameW,
 };
 
 pub(super) struct VolumeInfo {
-    pub(super) name: Vec<u16>,
-    pub(super) mount_points: Vec<Vec<u16>>,
+    pub(super) name: U16CString,
+    pub(super) mount_points: Vec<U16CString>,
 }
 
 pub(super) fn volumes_for_disk(number: u32) -> Result<Vec<VolumeInfo>> {
     let mut volumes = Vec::new();
     for name in VolumeFinder::new()? {
         let name = name?;
-        let mut device_path = name[..name.len() - 1].to_vec();
-        if device_path.last() == Some(&(b'\\' as u16)) {
-            device_path.pop();
-        }
-        device_path.push(0);
+        let device_path = volume_device_path(&name)?;
         let volume =
             open_device_wide(&device_path, 0).context("open volume for disk identity query")?;
         match volume_disk_number(&volume) {
@@ -44,7 +41,7 @@ pub(super) fn volumes_for_disk(number: u32) -> Result<Vec<VolumeInfo>> {
     Ok(volumes)
 }
 
-fn volume_paths(name: &[u16]) -> Result<Vec<Vec<u16>>> {
+fn volume_paths(name: &U16CStr) -> Result<Vec<U16CString>> {
     let mut required = 0;
     unsafe {
         GetVolumePathNamesForVolumeNameW(name.as_ptr(), null_mut(), 0, &mut required);
@@ -74,14 +71,10 @@ fn volume_paths(name: &[u16]) -> Result<Vec<Vec<u16>>> {
             return Err(last_os_error("reread volume mount points"));
         }
     }
-    let mut result = Vec::new();
-    for path in paths
+    // Windows returns MULTI_SZ here; each entry becomes its own C string.
+    paths
         .split(|unit| *unit == 0)
         .take_while(|path| !path.is_empty())
-    {
-        let mut path = path.to_vec();
-        path.push(0);
-        result.push(path);
-    }
-    Ok(result)
+        .map(|path| U16CString::from_vec(path).context("encode volume mount point"))
+        .collect()
 }

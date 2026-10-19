@@ -11,6 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tracing::warn;
+use widestring::{U16CStr, U16CString};
 
 use windows_sys::Win32::{
     Foundation::{GENERIC_READ, GENERIC_WRITE},
@@ -37,18 +38,16 @@ use super::{
 };
 
 pub(super) struct Volume {
-    name: Vec<u16>,
-    mount_points: Vec<Vec<u16>>,
+    name: U16CString,
+    mount_points: Vec<U16CString>,
     handle: OwnedHandle,
     locked: bool,
-    removed_mount_points: Vec<Vec<u16>>,
+    removed_mount_points: Vec<U16CString>,
 }
 
 impl Volume {
     pub(super) fn open(info: VolumeInfo, expected_disk: u32) -> Result<Self> {
-        let mut path = info.name[..info.name.len() - 1].to_vec();
-        path.pop();
-        path.push(0); // remove the GUID path's trailing backslash
+        let path = volume_device_path(&info.name)?;
         let handle =
             open_device_wide(&path, GENERIC_READ | GENERIC_WRITE).context("open target volume")?;
         if volume_disk_number(&handle)? != expected_disk {
@@ -68,7 +67,7 @@ impl Volume {
             Ok(()) => self.locked = true,
             Err(error) if force => {
                 warn!(
-                    volume = %String::from_utf16_lossy(&self.name[..self.name.len() - 1]),
+                    volume = %self.name.to_string_lossy(),
                     error = %format_args!("{error:#}"),
                     "Could not lock target volume; /force will attempt to dismount it. Open files may become invalid and unsaved data may be lost."
                 );
@@ -175,7 +174,7 @@ pub(super) fn verify_mounted_drive(
     verify_physical_disk_location(actual_disk_number, expected_location)
 }
 
-pub(super) fn get_volume_name(mount_point: &[u16]) -> Result<Vec<u16>> {
+pub(super) fn get_volume_name(mount_point: &U16CStr) -> Result<U16CString> {
     let mut volume_name = vec![0_u16; 128];
     if unsafe {
         GetVolumeNameForVolumeMountPointW(
@@ -187,7 +186,18 @@ pub(super) fn get_volume_name(mount_point: &[u16]) -> Result<Vec<u16>> {
     {
         return Err(last_os_error("resolve drive letter to a volume"));
     }
-    Ok(volume_name)
+    U16CStr::from_slice_truncate(&volume_name)
+        .context("unterminated volume name for drive letter")
+        .map(|name| name.to_owned())
+}
+
+pub(super) fn volume_device_path(name: &U16CStr) -> Result<U16CString> {
+    // Volume management APIs require the trailing backslash; CreateFileW does not.
+    let path = name
+        .as_slice()
+        .strip_suffix(&[b'\\' as u16])
+        .context("volume name is missing its trailing backslash")?;
+    U16CString::from_vec(path).context("encode volume device path")
 }
 
 pub(super) fn volume_disk_number(volume: &OwnedHandle) -> Result<u32> {
@@ -304,8 +314,9 @@ pub(super) fn wait_for_drive_state(
     }
 }
 
-pub(super) fn mount_point(letter: DriveLetter) -> Vec<u16> {
+pub(super) fn mount_point(letter: DriveLetter) -> Result<U16CString> {
     wide(OsStr::new(&format!("{}:\\", char::from(letter.as_ascii()))))
+        .context("encode drive-letter mount point")
 }
 
 #[cfg(test)]
@@ -319,7 +330,7 @@ mod tests {
         let handle = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
         assert!(!handle.is_null());
         Volume {
-            name: "test-volume\0".encode_utf16().collect(),
+            name: U16CString::from_str("test-volume").unwrap(),
             mount_points: Vec::new(),
             handle: OwnedHandle(handle),
             locked: false,
@@ -349,7 +360,7 @@ mod tests {
         let mut volume = non_volume();
         // Neither the empty mount point nor the synthetic volume name can
         // identify a real mount. Restoration must fail without changing one.
-        volume.removed_mount_points.push(vec![0]);
+        volume.removed_mount_points.push(U16CString::new());
         let error = volume.restore_mounts().unwrap_err();
         assert!(format!("{error:#}").starts_with("restore volume mount point:"));
         assert!(!format!("{error:#}").contains("unlock"));

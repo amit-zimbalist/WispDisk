@@ -1279,6 +1279,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "widestring",
  "windows-sys",
  "winresource",
  "wmi",

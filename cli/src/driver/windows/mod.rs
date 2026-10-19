@@ -3,13 +3,14 @@
 mod adapter;
 mod control_operation;
 mod disk;
+mod disk_deletion;
 mod disk_interface_notification;
 mod install;
 mod inventory;
 mod recovery;
 mod storage;
 mod volume;
-mod volume_deletion;
+mod volume_discovery;
 mod win32;
 
 use anyhow::{Context, Result, bail};
@@ -30,6 +31,7 @@ use self::{
         ScsiLocation, physical_disk_address, verify_physical_disk_location, wait_for_physical_disk,
         wait_for_physical_disk_absent,
     },
+    disk_deletion::DiskDeletion,
     install::install_embedded_driver,
     inventory::list_inventory,
     recovery::{UnresolvedOutcome, recovery_failed},
@@ -38,7 +40,6 @@ use self::{
         drive_letter_in_use, ensure_drive_letter_available, get_volume_name, mount_point,
         verify_mounted_drive, volume_disk_number, wait_for_drive_state,
     },
-    volume_deletion::VolumeDeletion,
     win32::open_device,
 };
 
@@ -240,18 +241,18 @@ fn delete_allocation(adapter: &Adapter, instance: u64, id: u32, force: bool) -> 
     let location = disk_location(adapter, entry);
     let number = wait_for_physical_disk(location, DEVICE_WAIT)?;
     info!(disk_number = number, "Open target volumes");
-    let mut volumes = VolumeDeletion::open(number, location)?;
+    let mut deletion = DiskDeletion::open(number, location)?;
     let prepared = (|| {
         info!(disk_number = number, "Lock target volumes");
-        volumes.lock(force)?;
+        deletion.lock(force)?;
         info!(disk_number = number, "Dismount target volumes");
-        volumes.dismount()?;
+        deletion.dismount()?;
         info!(disk_number = number, "Remove volume mount points");
-        volumes.remove_mounts()
+        deletion.remove_mounts()
     })();
     if let Err(error) = prepared {
         info!(disk_number = number, "Restore volume mount points");
-        return match volumes.restore() {
+        return match deletion.restore() {
             Ok(()) => Err(error),
             Err(restore) => Err(recovery_failed(
                 error,
@@ -272,7 +273,7 @@ fn delete_allocation(adapter: &Adapter, instance: u64, id: u32, force: bool) -> 
             });
         if still_online {
             info!(disk_number = number, "Restore volume mount points");
-            return match volumes.restore() {
+            return match deletion.restore() {
                 Ok(()) => Err(error.context("deletion rejected; original mount points restored")),
                 Err(restore) => Err(recovery_failed(
                     error,
@@ -285,7 +286,7 @@ fn delete_allocation(adapter: &Adapter, instance: u64, id: u32, force: bool) -> 
             "device {id} removal is not confirmed; inspect /list /json before retrying"
         )));
     }
-    drop(volumes);
+    drop(deletion);
     info!(
         device_id = id,
         disk_number = number,

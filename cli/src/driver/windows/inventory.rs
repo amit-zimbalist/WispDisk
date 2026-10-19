@@ -13,7 +13,7 @@ use super::{
     adapter::{Adapter, adapters},
     disk::find_physical_disk,
     disk_location,
-    volume_deletion::volumes_for_disk,
+    volume_discovery::volumes_for_disk,
 };
 
 #[derive(Serialize)]

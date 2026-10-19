@@ -32,7 +32,12 @@ implementation lives in `cli/src/driver/windows/`:
 - `disk.rs`: disk-interface discovery and SCSI identity checks;
 - `disk_interface_notification.rs`: arrival subscription, callback, and cleanup;
 - `storage.rs`: WMI disk/partition/volume models and provisioning;
-- `volume.rs`: drive-letter state, volume identity, locks, and mount rollback;
+- `volume.rs`: owns `Volume` handles, locks, dismounting, and mount recovery,
+  plus drive-letter state and volume identity helpers;
+- `volume_discovery.rs`: discovers volume names and mount points for inventory
+  and deletion without requiring write access;
+- `disk_deletion.rs`: `DiskDeletion` coordinates volume preparation and recovery,
+  keeping the lock-all-before-dismount ordering;
 - `win32.rs`: shared handle ownership, device opening, encoding, and errors.
 
 `cli/src/logging.rs` owns the opt-in logging lifetime. Its `subscriber` module

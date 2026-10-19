@@ -36,6 +36,8 @@ implementation lives in `cli/src/driver/windows/`:
   plus drive-letter state and volume identity helpers;
 - `volume_discovery.rs`: discovers volume names and mount points for inventory
   and deletion without requiring write access;
+- `volume_finder.rs`: `VolumeFinder` owns the Windows enumeration handle, yields
+  volume names through `Iterator`, and closes the enumeration on drop;
 - `disk_deletion.rs`: `DiskDeletion` coordinates volume preparation and recovery,
   keeping the lock-all-before-dismount ordering;
 - `win32.rs`: shared handle ownership, device opening, encoding, and errors.

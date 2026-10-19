@@ -1,15 +1,13 @@
 //! Discover volume names and mount points without requiring write access.
 use super::{
     volume::volume_disk_number,
+    volume_finder::VolumeFinder,
     win32::{last_os_error, open_device_wide},
 };
 use anyhow::{Context, Result};
 use std::{io, ptr::null_mut};
 use windows_sys::Win32::{
-    Foundation::{ERROR_MORE_DATA, ERROR_NO_MORE_FILES, INVALID_HANDLE_VALUE},
-    Storage::FileSystem::{
-        FindFirstVolumeW, FindNextVolumeW, FindVolumeClose, GetVolumePathNamesForVolumeNameW,
-    },
+    Foundation::ERROR_MORE_DATA, Storage::FileSystem::GetVolumePathNamesForVolumeNameW,
 };
 
 pub(super) struct VolumeInfo {
@@ -18,28 +16,10 @@ pub(super) struct VolumeInfo {
 }
 
 pub(super) fn volumes_for_disk(number: u32) -> Result<Vec<VolumeInfo>> {
-    let mut name = vec![0u16; 1024];
-    let enumeration = unsafe { FindFirstVolumeW(name.as_mut_ptr(), name.len() as u32) };
-    if enumeration == INVALID_HANDLE_VALUE {
-        return Err(last_os_error("enumerate volumes"));
-    }
-    struct Enumeration(windows_sys::Win32::Foundation::HANDLE);
-    impl Drop for Enumeration {
-        fn drop(&mut self) {
-            unsafe {
-                FindVolumeClose(self.0);
-            }
-        }
-    }
-    let enumeration = Enumeration(enumeration);
     let mut volumes = Vec::new();
-    loop {
-        let length = name
-            .iter()
-            .position(|unit| *unit == 0)
-            .context("unterminated volume name")?;
-        let volume_name = name[..=length].to_vec();
-        let mut device_path = name[..length].to_vec();
+    for name in VolumeFinder::new()? {
+        let name = name?;
+        let mut device_path = name[..name.len() - 1].to_vec();
         if device_path.last() == Some(&(b'\\' as u16)) {
             device_path.pop();
         }
@@ -48,8 +28,8 @@ pub(super) fn volumes_for_disk(number: u32) -> Result<Vec<VolumeInfo>> {
             open_device_wide(&device_path, 0).context("open volume for disk identity query")?;
         match volume_disk_number(&volume) {
             Ok(actual) if actual == number => volumes.push(VolumeInfo {
-                name: volume_name,
                 mount_points: volume_paths(&name)?,
+                name,
             }),
             Ok(_) => {}
             // Optical devices can have no media, and some volume types do not
@@ -59,14 +39,6 @@ pub(super) fn volumes_for_disk(number: u32) -> Result<Vec<VolumeInfo>> {
                     .downcast_ref::<io::Error>()
                     .is_some_and(|error| matches!(error.raw_os_error(), Some(1 | 21))) => {}
             Err(error) => return Err(error),
-        }
-        name.fill(0);
-        if unsafe { FindNextVolumeW(enumeration.0, name.as_mut_ptr(), name.len() as u32) } == 0 {
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() == Some(ERROR_NO_MORE_FILES as i32) {
-                break;
-            }
-            return Err(error).context("enumerate next volume");
         }
     }
     Ok(volumes)

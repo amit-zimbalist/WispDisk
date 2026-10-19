@@ -11,6 +11,7 @@ mod recovery;
 mod storage;
 mod volume;
 mod volume_discovery;
+mod volume_finder;
 mod win32;
 
 use anyhow::{Context, Result, bail};

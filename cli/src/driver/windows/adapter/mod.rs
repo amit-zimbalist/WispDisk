@@ -1,8 +1,18 @@
 //! Adapter discovery and validated WispDisk miniport protocol requests.
 
+mod control_operation;
+mod install;
 mod reserved_operation;
 
-use self::reserved_operation::ReservedOperation;
+pub(super) use self::install::install_embedded_driver;
+
+use self::{
+    control_operation::{
+        ControlOperation, CreateReserved, DeleteReserved, ListState, ProtocolRequest,
+        ProtocolResponse, QueryResult, QueryVersion, ReserveOperation,
+    },
+    reserved_operation::ReservedOperation,
+};
 use anyhow::{Context, Result, bail};
 
 use std::{
@@ -35,10 +45,6 @@ use crate::{
 
 use super::{
     DEVICE_WAIT, RETRY_INTERVAL,
-    control_operation::{
-        ControlOperation, CreateReserved, DeleteReserved, ListState, ProtocolRequest,
-        ProtocolResponse, QueryResult, QueryVersion, ReserveOperation,
-    },
     recovery::{DriverRejection, OperationHandle, UnresolvedOutcome, resolve_operation},
     win32::{OwnedHandle, last_os_error, open_device},
 };

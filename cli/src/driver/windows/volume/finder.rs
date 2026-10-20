@@ -8,7 +8,7 @@ use windows_sys::Win32::{
     Storage::FileSystem::{FindFirstVolumeW, FindNextVolumeW, FindVolumeClose},
 };
 
-use super::win32::{last_os_error, wide_from_buffer};
+use super::super::win32::{last_os_error, wide_from_buffer};
 
 pub(super) struct VolumeFinder {
     handle: HANDLE,

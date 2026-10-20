@@ -1,5 +1,10 @@
 //! Owned volume operations, drive-letter state, and volume identity.
 
+mod discovery;
+mod finder;
+
+pub(super) use self::discovery::{VolumeInfo, volumes_for_disk};
+
 use anyhow::{Context, Result, bail, ensure};
 
 use std::{
@@ -33,7 +38,6 @@ use super::{
     RETRY_INTERVAL,
     disk::{ScsiLocation, verify_physical_disk_location},
     recovery::recovery_failed,
-    volume_discovery::VolumeInfo,
     win32::{OwnedHandle, last_os_error, open_device, open_device_wide, wide, wide_from_buffer},
 };
 

@@ -10,11 +10,9 @@ use wmi::WMIConnection;
 
 use crate::args::{DriveLetter, FileSystem, MediaKind};
 
-use super::{
-    DEVICE_WAIT, RETRY_INTERVAL,
-    disk::{ScsiLocation, verify_physical_disk_location},
-    volume::ensure_drive_letter_available,
-};
+use super::super::{DEVICE_WAIT, RETRY_INTERVAL, volume::ensure_drive_letter_available};
+
+use super::{ScsiLocation, verify_physical_disk_location};
 
 const PARTITION_STYLE_RAW: u16 = 0;
 const PARTITION_STYLE_MBR: u16 = 1;

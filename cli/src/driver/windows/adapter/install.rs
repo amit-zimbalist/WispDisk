@@ -22,14 +22,14 @@ use windows_sys::Win32::{
 
 use crate::payload;
 
-use super::{
+use super::super::{
     recovery::recovery_failed,
     win32::{DeviceInfoSet, last_os_error, multisz_entries, wide},
 };
 
 const ROOT_HARDWARE_ID: &str = r"ROOT\WISPDISK";
 
-pub(super) fn install_embedded_driver() -> Result<()> {
+pub(in crate::driver::windows) fn install_embedded_driver() -> Result<()> {
     DriverPackage::extract_embedded()?.install()
 }
 

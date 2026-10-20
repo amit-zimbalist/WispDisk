@@ -1,6 +1,21 @@
-//! Physical disk discovery and SCSI identity verification.
+//! Disk creation, removal, provisioning, and physical disk identity.
+
+mod creation;
+mod deletion;
+mod interface_notification;
+mod provisioning;
+mod removal;
+
+pub(super) use self::{
+    creation::add_disk,
+    removal::{delete_by_identity, delete_disk},
+};
+
+use self::interface_notification::DiskInterfaceNotification;
 
 use anyhow::{Context, Result, bail, ensure};
+
+use crate::protocol::DiskState;
 
 use std::{
     io,
@@ -30,7 +45,7 @@ use windows_sys::Win32::{
 
 use super::{
     RETRY_INTERVAL,
-    disk_interface_notification::DiskInterfaceNotification,
+    adapter::Adapter,
     win32::{
         DeviceInfoSet, OwnedHandle, last_os_error, open_device, open_device_wide, wide_from_buffer,
     },
@@ -43,6 +58,16 @@ pub(super) struct ScsiLocation {
     pub(super) target: u8,
     pub(super) lun: u8,
 }
+
+pub(super) fn disk_location(adapter: &Adapter, entry: &DiskState) -> ScsiLocation {
+    ScsiLocation {
+        port: adapter.port_number,
+        path: entry.disk.path_id,
+        target: entry.disk.target_id,
+        lun: entry.disk.lun,
+    }
+}
+
 pub(super) fn wait_for_physical_disk(location: ScsiLocation, timeout: Duration) -> Result<u32> {
     // Register before the first enumeration so an arrival cannot be lost between
     // checking existing interfaces and beginning the wait.

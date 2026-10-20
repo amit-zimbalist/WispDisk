@@ -1,3 +1,5 @@
+mod manifest;
+
 use std::{
     env,
     ffi::{OsStr, OsString},
@@ -7,6 +9,8 @@ use std::{
     process::{Command, Output},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+use manifest::{BuildManifest, ManifestFile};
 
 const PACKAGE_FILES: [&str; 3] = ["WispDisk.sys", "WispDisk.inf", "WispDisk.cat"];
 
@@ -96,14 +100,14 @@ impl Platform {
         }
     }
 
-    fn pe_machine(self) -> u16 {
+    fn pe_machine_type(self) -> u16 {
         match self {
             Self::X64 => 0x8664,
             Self::Arm64 => 0xAA64,
         }
     }
 
-    fn pe_machine_name(self) -> &'static str {
+    fn pe_machine_type_name(self) -> &'static str {
         match self {
             Self::X64 => "AMD64",
             Self::Arm64 => "ARM64",
@@ -721,19 +725,19 @@ fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
 }
 
 fn confirm_pe_architecture(path: &Path, platform: Platform) -> BuildResult<()> {
-    let actual = pe_machine(path)?;
-    if actual != platform.pe_machine() {
+    let actual = pe_machine_type(path)?;
+    if actual != platform.pe_machine_type() {
         return Err(format!(
             "architecture mismatch for '{}': expected {} (0x{:04X}), found 0x{actual:04X}",
             path.display(),
-            platform.pe_machine_name(),
-            platform.pe_machine()
+            platform.pe_machine_type_name(),
+            platform.pe_machine_type()
         ));
     }
     Ok(())
 }
 
-fn pe_machine(path: &Path) -> BuildResult<u16> {
+fn pe_machine_type(path: &Path) -> BuildResult<u16> {
     require_file(path, "PE image")?;
     let mut file =
         fs::File::open(path).map_err(|error| path_error("open PE image", path, error))?;
@@ -825,45 +829,27 @@ fn write_manifest(
         let metadata = fs::metadata(file_path)
             .map_err(|error| path_error("inspect manifest input", file_path, error))?;
         let hash = hash_file(certutil, file_path, "SHA256", 64)?;
-        file_entries.push(format!(
-            "    {{\n      \"Role\": \"{}\",\n      \"Path\": \"{}\",\n      \"Length\": {},\n      \"SHA256\": \"{}\"\n    }}",
-            json_escape(role),
-            json_escape(&file_path.display().to_string()),
-            metadata.len(),
-            hash
-        ));
+        file_entries.push(ManifestFile {
+            role,
+            path: file_path.display().to_string(),
+            length: metadata.len(),
+            sha256: hash,
+        });
     }
 
-    let manifest = format!(
-        "{{\n  \"SchemaVersion\": 3,\n  \"CreatedAtUnixSeconds\": {created},\n  \"Configuration\": \"{}\",\n  \"Platform\": \"{}\",\n  \"RustTarget\": \"{}\",\n  \"PeMachine\": \"0x{:04X}\",\n  \"WindowsKitVersion\": \"{}\",\n  \"DriverTestCertificateThumbprint\": \"{}\",\n  \"ExecutableCertificateThumbprint\": \"{}\",\n  \"Files\": [\n{}\n  ]\n}}\n",
-        options.configuration.as_msbuild(),
-        options.platform.as_msbuild(),
-        options.platform.rust_target(),
-        options.platform.pe_machine(),
-        json_escape(sdk_version),
-        driver_certificate,
-        exe_certificate,
-        file_entries.join(",\n")
-    );
-    fs::write(path, manifest).map_err(|error| path_error("write build manifest", path, error))
-}
-
-fn json_escape(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    for character in value.chars() {
-        match character {
-            '"' => escaped.push_str("\\\""),
-            '\\' => escaped.push_str("\\\\"),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            character if character.is_control() => {
-                escaped.push_str(&format!("\\u{:04X}", character as u32));
-            }
-            character => escaped.push(character),
-        }
-    }
-    escaped
+    let manifest = BuildManifest {
+        schema_version: 3,
+        created_at_unix_seconds: created,
+        configuration: options.configuration.as_msbuild(),
+        platform: options.platform.as_msbuild(),
+        rust_target: options.platform.rust_target(),
+        pe_machine_type: format!("0x{:04X}", options.platform.pe_machine_type()),
+        windows_kit_version: sdk_version,
+        driver_test_certificate_thumbprint: driver_certificate,
+        executable_certificate_thumbprint: exe_certificate,
+        files: file_entries,
+    };
+    manifest.write(path)
 }
 
 fn hash_file(
@@ -1035,13 +1021,5 @@ mod tests {
             b"unsigned-driver"
         ));
         assert!(!contains_bytes(b"anything", b""));
-    }
-
-    #[test]
-    fn escapes_json_paths() {
-        assert_eq!(
-            json_escape("C:\\path\n\"file\""),
-            "C:\\\\path\\n\\\"file\\\""
-        );
     }
 }

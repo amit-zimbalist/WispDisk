@@ -2,12 +2,12 @@
 
 use anyhow::Result;
 
-use super::{
-    disk::{ScsiLocation, verify_physical_disk_location},
+use super::super::{
     recovery::recovery_failed,
-    volume::Volume,
-    volume_discovery::volumes_for_disk,
+    volume::{Volume, volumes_for_disk},
 };
+
+use super::{ScsiLocation, verify_physical_disk_location};
 
 pub(super) struct DiskDeletion {
     volumes: Vec<Volume>,

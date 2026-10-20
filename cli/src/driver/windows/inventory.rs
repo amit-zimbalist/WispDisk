@@ -11,9 +11,8 @@ use serde::{Serialize, Serializer};
 
 use super::{
     adapter::{Adapter, adapters},
-    disk::find_physical_disk,
-    disk_location,
-    volume_discovery::volumes_for_disk,
+    disk::{disk_location, find_physical_disk},
+    volume::volumes_for_disk,
 };
 
 #[derive(Serialize)]

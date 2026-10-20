@@ -22,7 +22,7 @@ use windows_sys::Win32::{
     },
 };
 
-use super::win32::{OwnedHandle, last_os_error};
+use super::super::win32::{OwnedHandle, last_os_error};
 
 pub(super) struct DiskInterfaceNotification {
     handle: HCMNOTIFICATION,

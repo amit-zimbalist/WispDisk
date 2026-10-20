@@ -7,6 +7,10 @@ These guidelines apply to `cli/` in addition to the shared root
 
 - Split modules by responsibility and give substantial resource-owning
   types their own modules.
+- Group related modules into directories when they share a clear subsystem
+  responsibility, such as adapters, disks, or volumes. Expose entry points
+  through the subsystem's `mod.rs` and keep implementation modules private.
+  Avoid directories that merely add another layer.
 - Keep orchestration readable by delegating installation, discovery,
   notifications, storage provisioning, and volume operations to focused
   components.
@@ -14,6 +18,10 @@ These guidelines apply to `cli/` in addition to the shared root
   same resource or state. `DriverPackage` and `CreatedDevice` are examples.
 - Use the narrowest visibility needed, including private items and
   `pub(super)` for implementation helpers.
+- Preserve the intended access boundary when nesting or moving modules.
+  Prefer `pub(super)`; use `pub(in ...)` for the narrowest ancestor scope
+  needed by collaborating subsystems. Do not broaden visibility to
+  `pub(crate)` just to fix imports.
 - Prefer idiomatic Rust types and standard traits over repeated manual
   field manipulation.
 

@@ -1,9 +1,6 @@
 //! Discover volume names and mount points without requiring write access.
-use super::{
-    volume::{Volume, volume_device_path},
-    volume_finder::VolumeFinder,
-    win32::{last_os_error, multisz_entries, open_device_wide},
-};
+use super::super::win32::{last_os_error, multisz_entries, open_device_wide};
+use super::{Volume, finder::VolumeFinder, volume_device_path};
 use anyhow::{Context, Result};
 use std::{io, ptr::null_mut};
 use widestring::{U16CStr, U16CString};
@@ -11,12 +8,12 @@ use windows_sys::Win32::{
     Foundation::ERROR_MORE_DATA, Storage::FileSystem::GetVolumePathNamesForVolumeNameW,
 };
 
-pub(super) struct VolumeInfo {
+pub(in crate::driver::windows) struct VolumeInfo {
     pub(super) name: U16CString,
-    pub(super) mount_points: Vec<U16CString>,
+    pub(in crate::driver::windows) mount_points: Vec<U16CString>,
 }
 
-pub(super) fn volumes_for_disk(number: u32) -> Result<Vec<VolumeInfo>> {
+pub(in crate::driver::windows) fn volumes_for_disk(number: u32) -> Result<Vec<VolumeInfo>> {
     let mut volumes = Vec::new();
     for name in VolumeFinder::new()? {
         let name = name?;

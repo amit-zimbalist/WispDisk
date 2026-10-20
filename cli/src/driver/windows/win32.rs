@@ -7,7 +7,7 @@ use std::{
     io,
     ptr::{null, null_mut},
 };
-use widestring::{U16CStr, U16CString};
+use widestring::{U16CStr, U16CString, U16Str};
 
 use windows_sys::{
     Win32::{
@@ -80,6 +80,19 @@ pub(super) fn wide(value: &OsStr) -> io::Result<U16CString> {
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
 }
 
+pub(super) fn wide_from_buffer(buffer: &[u16]) -> Result<U16CString> {
+    Ok(U16CStr::from_slice_truncate(buffer)?.to_owned())
+}
+
+// Entries borrow the buffer and exclude their terminators. The first empty
+// entry ends MULTI_SZ, so unused buffer capacity is ignored.
+pub(super) fn multisz_entries(buffer: &[u16]) -> impl Iterator<Item = &U16Str> + '_ {
+    buffer
+        .split(|unit| *unit == 0)
+        .take_while(|entry| !entry.is_empty())
+        .map(U16Str::from_slice)
+}
+
 pub(super) fn last_os_error(operation: &str) -> Error {
     Error::new(io::Error::last_os_error()).context(operation.to_owned())
 }
@@ -87,6 +100,17 @@ pub(super) fn last_os_error(operation: &str) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_windows_multisz() {
+        let values = [b'A' as u16, 0, b'B' as u16, b'C' as u16, 0, 0];
+        assert_eq!(
+            multisz_entries(&values)
+                .map(|entry| entry.to_string_lossy())
+                .collect::<Vec<_>>(),
+            ["A", "BC"]
+        );
+    }
 
     #[test]
     fn rejects_embedded_nuls_in_device_paths_before_calling_windows() {

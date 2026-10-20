@@ -34,7 +34,7 @@ use super::{
     disk::{ScsiLocation, verify_physical_disk_location},
     recovery::recovery_failed,
     volume_discovery::VolumeInfo,
-    win32::{OwnedHandle, last_os_error, open_device, open_device_wide, wide},
+    win32::{OwnedHandle, last_os_error, open_device, open_device_wide, wide, wide_from_buffer},
 };
 
 pub(super) struct Volume {
@@ -50,7 +50,7 @@ impl Volume {
         let path = volume_device_path(&info.name)?;
         let handle =
             open_device_wide(&path, GENERIC_READ | GENERIC_WRITE).context("open target volume")?;
-        if volume_disk_number(&handle)? != expected_disk {
+        if Self::disk_number(&handle)? != expected_disk {
             bail!("volume changed disk identity before deletion");
         }
         Ok(Self {
@@ -60,6 +60,43 @@ impl Volume {
             locked: false,
             removed_mount_points: Vec::new(),
         })
+    }
+
+    pub(super) fn disk_number(handle: &OwnedHandle) -> Result<u32> {
+        let mut storage = [0_u64; 128];
+        let mut returned = 0;
+        let result = unsafe {
+            DeviceIoControl(
+                handle.0,
+                IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+                null(),
+                0,
+                storage.as_mut_ptr().cast(),
+                size_of_val(&storage) as u32,
+                &mut returned,
+                null_mut(),
+            )
+        };
+        if result == 0 {
+            return Err(last_os_error("resolve volume to a physical disk"));
+        }
+        ensure!(
+            returned >= size_of::<VOLUME_DISK_EXTENTS>() as u32,
+            "volume returned truncated disk extents ({returned} bytes)"
+        );
+        let extents = unsafe {
+            storage
+                .as_ptr()
+                .cast::<VOLUME_DISK_EXTENTS>()
+                .read_unaligned()
+        };
+        if extents.NumberOfDiskExtents != 1 {
+            bail!(
+                "refusing to delete a volume spanning {} physical disks",
+                extents.NumberOfDiskExtents
+            );
+        }
+        Ok(extents.Extents[0].DiskNumber)
     }
 
     pub(super) fn lock(&mut self, force: bool) -> Result<()> {
@@ -165,7 +202,7 @@ pub(super) fn verify_mounted_drive(
         GENERIC_READ,
     )
     .context("open newly formatted volume")?;
-    let actual_disk_number = volume_disk_number(&volume)?;
+    let actual_disk_number = Volume::disk_number(&volume)?;
     if actual_disk_number != expected_disk_number {
         bail!(
             "new mount {letter} resolved to PhysicalDrive{actual_disk_number}, not the created PhysicalDrive{expected_disk_number}"
@@ -186,9 +223,7 @@ pub(super) fn get_volume_name(mount_point: &U16CStr) -> Result<U16CString> {
     {
         return Err(last_os_error("resolve drive letter to a volume"));
     }
-    U16CStr::from_slice_truncate(&volume_name)
-        .context("unterminated volume name for drive letter")
-        .map(|name| name.to_owned())
+    wide_from_buffer(&volume_name).context("unterminated volume name for drive letter")
 }
 
 pub(super) fn volume_device_path(name: &U16CStr) -> Result<U16CString> {
@@ -198,43 +233,6 @@ pub(super) fn volume_device_path(name: &U16CStr) -> Result<U16CString> {
         .strip_suffix(&[b'\\' as u16])
         .context("volume name is missing its trailing backslash")?;
     U16CString::from_vec(path).context("encode volume device path")
-}
-
-pub(super) fn volume_disk_number(volume: &OwnedHandle) -> Result<u32> {
-    let mut storage = [0_u64; 128];
-    let mut returned = 0;
-    let result = unsafe {
-        DeviceIoControl(
-            volume.0,
-            IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
-            null(),
-            0,
-            storage.as_mut_ptr().cast(),
-            size_of_val(&storage) as u32,
-            &mut returned,
-            null_mut(),
-        )
-    };
-    if result == 0 {
-        return Err(last_os_error("resolve volume to a physical disk"));
-    }
-    ensure!(
-        returned >= size_of::<VOLUME_DISK_EXTENTS>() as u32,
-        "volume returned truncated disk extents ({returned} bytes)"
-    );
-    let extents = unsafe {
-        storage
-            .as_ptr()
-            .cast::<VOLUME_DISK_EXTENTS>()
-            .read_unaligned()
-    };
-    if extents.NumberOfDiskExtents != 1 {
-        bail!(
-            "refusing to delete a volume spanning {} physical disks",
-            extents.NumberOfDiskExtents
-        );
-    }
-    Ok(extents.Extents[0].DiskNumber)
 }
 
 fn volume_control(volume: &OwnedHandle, code: u32, operation: &str) -> Result<()> {

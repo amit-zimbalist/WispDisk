@@ -2,13 +2,13 @@
 
 use anyhow::{Context, Result};
 use std::io;
-use widestring::{U16CStr, U16CString};
+use widestring::U16CString;
 use windows_sys::Win32::{
     Foundation::{ERROR_NO_MORE_FILES, HANDLE, INVALID_HANDLE_VALUE},
     Storage::FileSystem::{FindFirstVolumeW, FindNextVolumeW, FindVolumeClose},
 };
 
-use super::win32::last_os_error;
+use super::win32::{last_os_error, wide_from_buffer};
 
 pub(super) struct VolumeFinder {
     handle: HANDLE,
@@ -59,9 +59,7 @@ impl Iterator for VolumeFinder {
                 };
             }
         }
-        let name = U16CStr::from_slice_truncate(&self.name)
-            .context("unterminated volume name")
-            .map(|name| name.to_owned());
+        let name = wide_from_buffer(&self.name).context("unterminated volume name");
         if name.is_err() {
             self.finished = true;
         }

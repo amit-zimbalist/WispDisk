@@ -1,8 +1,8 @@
 //! Discover volume names and mount points without requiring write access.
 use super::{
-    volume::{volume_device_path, volume_disk_number},
+    volume::{Volume, volume_device_path},
     volume_finder::VolumeFinder,
-    win32::{last_os_error, open_device_wide},
+    win32::{last_os_error, multisz_entries, open_device_wide},
 };
 use anyhow::{Context, Result};
 use std::{io, ptr::null_mut};
@@ -23,7 +23,7 @@ pub(super) fn volumes_for_disk(number: u32) -> Result<Vec<VolumeInfo>> {
         let device_path = volume_device_path(&name)?;
         let volume =
             open_device_wide(&device_path, 0).context("open volume for disk identity query")?;
-        match volume_disk_number(&volume) {
+        match Volume::disk_number(&volume) {
             Ok(actual) if actual == number => volumes.push(VolumeInfo {
                 mount_points: volume_paths(&name)?,
                 name,
@@ -71,10 +71,7 @@ fn volume_paths(name: &U16CStr) -> Result<Vec<U16CString>> {
             return Err(last_os_error("reread volume mount points"));
         }
     }
-    // Windows returns MULTI_SZ here; each entry becomes its own C string.
-    paths
-        .split(|unit| *unit == 0)
-        .take_while(|path| !path.is_empty())
-        .map(|path| U16CString::from_vec(path).context("encode volume mount point"))
+    multisz_entries(&paths)
+        .map(|path| U16CString::from_ustr(path).context("encode volume mount point"))
         .collect()
 }

@@ -24,7 +24,7 @@ use crate::payload;
 
 use super::{
     recovery::recovery_failed,
-    win32::{DeviceInfoSet, last_os_error, wide},
+    win32::{DeviceInfoSet, last_os_error, multisz_entries, wide},
 };
 
 const ROOT_HARDWARE_ID: &str = r"ROOT\WISPDISK";
@@ -243,25 +243,13 @@ fn device_has_hardware_id(
         return Err(error).context("read adapter hardware id");
     }
     let units = (required as usize / size_of::<u16>()).min(buffer.len());
-    Ok(multisz(&buffer[..units]).any(|value| value.eq_ignore_ascii_case(expected)))
-}
-
-fn multisz(buffer: &[u16]) -> impl Iterator<Item = String> + '_ {
-    buffer
-        .split(|unit| *unit == 0)
-        .take_while(|entry| !entry.is_empty())
-        .map(String::from_utf16_lossy)
+    Ok(multisz_entries(&buffer[..units])
+        .any(|value| value.to_string_lossy().eq_ignore_ascii_case(expected)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parses_windows_multisz() {
-        let values = [b'A' as u16, 0, b'B' as u16, b'C' as u16, 0, 0];
-        assert_eq!(multisz(&values).collect::<Vec<_>>(), ["A", "BC"]);
-    }
 
     #[test]
     fn rejects_empty_package_files_before_writing() {

@@ -38,8 +38,8 @@ use self::{
     recovery::{UnresolvedOutcome, recovery_failed},
     storage::initialize_and_format,
     volume::{
-        drive_letter_in_use, ensure_drive_letter_available, get_volume_name, mount_point,
-        verify_mounted_drive, volume_disk_number, wait_for_drive_state,
+        Volume, drive_letter_in_use, ensure_drive_letter_available, get_volume_name, mount_point,
+        verify_mounted_drive, wait_for_drive_state,
     },
     win32::open_device,
 };
@@ -171,7 +171,7 @@ fn delete_disk(letter: DriveLetter, force: bool) -> Result<()> {
         GENERIC_READ,
     )
     .context("open target volume for identity")?;
-    let number = volume_disk_number(&volume)?;
+    let number = Volume::disk_number(&volume)?;
     let address = physical_disk_address(number)?;
     drop(volume);
     let mut matched = None;

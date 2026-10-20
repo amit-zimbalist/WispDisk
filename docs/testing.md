@@ -45,6 +45,26 @@ stderr and returns exit code 1 before executing the command. Verify `/list /json
 JSON and rejects `/log`. Exercise adapter removal/reload to cover provider cleanup,
 and injected management failures to verify warning/error severity in both builds.
 
+## Forced deletion verification
+
+In the disposable VM, create a WispDisk volume and hold a file open on it. Repeat
+for FAT, FAT32, and NTFS, with both fixed and removable disks:
+
+- `/del /letter <LETTER>` must fail to lock, leave the allocation online, and
+  preserve its mount points.
+- `/del /letter <LETTER> /force /log warn` must log a warning on stdout, attempt
+  dismounting, and remove the allocation and its Windows disk/volume devices.
+  Repeat without `/log` to confirm deletion succeeds without a log warning.
+  Existing application handles may fail after dismounting.
+- Repeat using `/del /adapter <INSTANCE> /id <ID> /force`, including a volume
+  without a drive letter and a disk with multiple volumes, some busy and some idle.
+- Inject a confirmed driver deletion rejection after mount removal. Confirm the
+  original mount points are restored for both locked and forcibly dismounted
+  volumes, with no unlock attempted for a volume whose lock failed. Data and
+  application handles invalidated by dismounting are not recoverable by this step.
+- Verify dismount and mount-removal failures still prevent driver deletion, and
+  stale adapter/device identities remain rejected with `/force`.
+
 ## Signing in the guest
 
 Use a dedicated, disposable test certificate. Sign the catalog, install only

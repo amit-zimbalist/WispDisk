@@ -12,7 +12,7 @@ const LOGICAL_SECTOR_SIZE: u64 = 512;
     name = "wispdisk",
     version,
     about = "Create and remove volatile virtual disks on Windows",
-    override_usage = "wispdisk.exe /add (/hdd|/rem) /letter <LETTER> /size <SIZE> [/fs <FAT|FAT32|NTFS>]\n       wispdisk.exe /del /letter <LETTER>\n       wispdisk.exe /del /adapter <INSTANCE> /id <ID>\n       wispdisk.exe /list [/json]",
+    override_usage = "wispdisk.exe /add (/hdd|/rem) /letter <LETTER> /size <SIZE> [/fs <FAT|FAT32|NTFS>]\n       wispdisk.exe /del /letter <LETTER> [/force]\n       wispdisk.exe /del /adapter <INSTANCE> /id <ID> [/force]\n       wispdisk.exe /list [/json]",
     group(ArgGroup::new("operation").required(true).multiple(false).args(["add", "delete", "list"])),
     group(ArgGroup::new("media").multiple(false).args(["hdd", "removable"]))
 )]
@@ -24,6 +24,10 @@ pub struct Cli {
     /// Remove a virtual disk.
     #[arg(long = "del")]
     delete: bool,
+
+    /// Dismount even if volume locking fails; open files may become invalid and data may be lost (only with /del).
+    #[arg(long)]
+    force: bool,
 
     /// List driver allocations, including unformatted and unmounted disks.
     #[arg(long)]
@@ -68,6 +72,9 @@ pub struct Cli {
 
 impl Cli {
     pub fn into_command(self) -> Result<Command, ValidationError> {
+        if self.force && !self.delete {
+            return Err(ValidationError::ForceWithoutDelete);
+        }
         if self.list {
             if self.letter.is_some()
                 || self.size.is_some()
@@ -123,9 +130,16 @@ impl Cli {
                 return Err(ValidationError::FileSystemOnDelete);
             }
             match (self.letter, self.id, self.adapter) {
-                (Some(letter), None, None) => Ok(Command::Delete { letter }),
+                (Some(letter), None, None) => Ok(Command::Delete {
+                    letter,
+                    force: self.force,
+                }),
                 (None, Some(id), Some(adapter)) if id != 0 && adapter != 0 => {
-                    Ok(Command::DeleteId { adapter, id })
+                    Ok(Command::DeleteId {
+                        adapter,
+                        id,
+                        force: self.force,
+                    })
                 }
                 (None, None, None) => Err(ValidationError::MissingLetter),
                 _ => Err(ValidationError::DeleteIdentity),
@@ -142,6 +156,7 @@ pub enum Command {
     DeleteId {
         adapter: u64,
         id: u32,
+        force: bool,
     },
     Add {
         letter: DriveLetter,
@@ -151,6 +166,7 @@ pub enum Command {
     },
     Delete {
         letter: DriveLetter,
+        force: bool,
     },
 }
 
@@ -158,9 +174,10 @@ impl fmt::Display for Command {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::List { .. } => formatter.write_str("list WispDisk allocations"),
-            Self::DeleteId { adapter, id } => write!(
+            Self::DeleteId { adapter, id, force } => write!(
                 formatter,
-                "delete WispDisk device {id} on adapter instance {adapter}"
+                "delete WispDisk device {id} on adapter instance {adapter}{}",
+                if *force { " (force)" } else { "" }
             ),
             Self::Add {
                 letter,
@@ -171,7 +188,11 @@ impl fmt::Display for Command {
                 formatter,
                 "add {media} disk at {letter} with {size_bytes} bytes formatted as {file_system}"
             ),
-            Self::Delete { letter } => write!(formatter, "delete virtual disk at {letter}"),
+            Self::Delete { letter, force } => write!(
+                formatter,
+                "delete virtual disk at {letter}{}",
+                if *force { " (force)" } else { "" }
+            ),
         }
     }
 }
@@ -299,6 +320,7 @@ impl FromStr for ByteSize {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ValidationError {
     UnexpectedOptions,
+    ForceWithoutDelete,
     DeleteIdentity,
     MissingLetter,
     MissingMedia,
@@ -316,6 +338,7 @@ impl fmt::Display for ValidationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let message = match self {
             Self::UnexpectedOptions => "options are not valid for the selected operation",
+            Self::ForceWithoutDelete => "/force is only valid with /del",
             Self::DeleteIdentity => {
                 "delete requires either /letter or both nonzero /adapter and /id"
             }
@@ -365,6 +388,7 @@ fn normalize_one(argument: OsString) -> OsString {
         "adapter" => "adapter",
         "add" => "add",
         "del" => "del",
+        "force" => "force",
         "hdd" => "hdd",
         "rem" => "rem",
         "letter" => "letter",
@@ -423,7 +447,8 @@ mod tests {
             parse(&["wispdisk.exe", "/del", "/adapter:123", "/id:7"]).into_command(),
             Ok(Command::DeleteId {
                 adapter: 123,
-                id: 7
+                id: 7,
+                force: false,
             })
         );
     }
@@ -533,9 +558,58 @@ mod tests {
         assert_eq!(
             parsed.into_command().unwrap(),
             Command::Delete {
-                letter: DriveLetter('S')
+                letter: DriveLetter('S'),
+                force: false,
             }
         );
+    }
+
+    #[test]
+    fn accepts_force_for_both_deletion_forms() {
+        for force_option in ["/force", "/FORCE", "--force"] {
+            assert_eq!(
+                parse(&["wispdisk.exe", "/del", "/letter:R", force_option]).into_command(),
+                Ok(Command::Delete {
+                    letter: DriveLetter('R'),
+                    force: true,
+                })
+            );
+            assert_eq!(
+                parse(&[
+                    "wispdisk.exe",
+                    "/del",
+                    "/adapter:123",
+                    "/id:7",
+                    force_option,
+                ])
+                .into_command(),
+                Ok(Command::DeleteId {
+                    adapter: 123,
+                    id: 7,
+                    force: true,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_force_without_deletion() {
+        for arguments in [
+            vec!["wispdisk.exe", "/list", "/force"],
+            vec![
+                "wispdisk.exe",
+                "/add",
+                "/hdd",
+                "/letter:R",
+                "/size:64MiB",
+                "/force",
+            ],
+        ] {
+            assert_eq!(
+                parse(&arguments).into_command(),
+                Err(ValidationError::ForceWithoutDelete)
+            );
+        }
     }
 
     #[test]

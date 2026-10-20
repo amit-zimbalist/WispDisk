@@ -9,6 +9,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use widestring::U16CString;
 
 use windows_sys::Win32::{
     Devices::DeviceAndDriverInstallation::{
@@ -30,7 +31,9 @@ use windows_sys::Win32::{
 use super::{
     RETRY_INTERVAL,
     disk_interface_notification::DiskInterfaceNotification,
-    win32::{DeviceInfoSet, OwnedHandle, last_os_error, open_device, open_device_wide},
+    win32::{
+        DeviceInfoSet, OwnedHandle, last_os_error, open_device, open_device_wide, wide_from_buffer,
+    },
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -137,7 +140,7 @@ pub(super) fn find_physical_disk(expected: ScsiLocation) -> Result<Option<u32>> 
 fn disk_interface_path(
     set: &DeviceInfoSet,
     interface: &SP_DEVICE_INTERFACE_DATA,
-) -> Result<Vec<u16>> {
+) -> Result<U16CString> {
     let mut required = 0;
     let first_result = unsafe {
         SetupDiGetDeviceInterfaceDetailW(set.0, interface, null_mut(), 0, &mut required, null_mut())
@@ -181,10 +184,7 @@ fn disk_interface_path(
     let path_offset = path as usize - detail as usize;
     let maximum_units = (storage_bytes - path_offset) / size_of::<u16>();
     let units = unsafe { std::slice::from_raw_parts(path, maximum_units) };
-    let Some(terminator) = units.iter().position(|unit| *unit == 0) else {
-        bail!("SetupAPI returned an unterminated disk-interface path");
-    };
-    Ok(units[..=terminator].to_vec())
+    wide_from_buffer(units).context("SetupAPI returned an unterminated disk-interface path")
 }
 
 fn storage_device_number(device: &OwnedHandle) -> Result<u32> {

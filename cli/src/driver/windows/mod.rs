@@ -3,13 +3,15 @@
 mod adapter;
 mod control_operation;
 mod disk;
+mod disk_deletion;
 mod disk_interface_notification;
 mod install;
 mod inventory;
 mod recovery;
 mod storage;
 mod volume;
-mod volume_deletion;
+mod volume_discovery;
+mod volume_finder;
 mod win32;
 
 use anyhow::{Context, Result, bail};
@@ -30,15 +32,15 @@ use self::{
         ScsiLocation, physical_disk_address, verify_physical_disk_location, wait_for_physical_disk,
         wait_for_physical_disk_absent,
     },
+    disk_deletion::DiskDeletion,
     install::install_embedded_driver,
     inventory::list_inventory,
     recovery::{UnresolvedOutcome, recovery_failed},
     storage::initialize_and_format,
     volume::{
-        drive_letter_in_use, ensure_drive_letter_available, get_volume_name, mount_point,
-        verify_mounted_drive, volume_disk_number, wait_for_drive_state,
+        Volume, drive_letter_in_use, ensure_drive_letter_available, get_volume_name, mount_point,
+        verify_mounted_drive, wait_for_drive_state,
     },
-    volume_deletion::VolumeDeletion,
     win32::open_device,
 };
 
@@ -57,8 +59,8 @@ pub(super) fn execute(command: &Command) -> Result<()> {
             size_bytes,
             file_system,
         } => add_disk(*letter, *media, *size_bytes, *file_system),
-        Command::Delete { letter } => delete_disk(*letter),
-        Command::DeleteId { adapter, id } => delete_by_identity(*adapter, *id),
+        Command::Delete { letter, force } => delete_disk(*letter, *force),
+        Command::DeleteId { adapter, id, force } => delete_by_identity(*adapter, *id, *force),
         Command::List { json } => list_inventory(*json),
     }
 }
@@ -127,7 +129,7 @@ fn add_disk(
         );
         let deadline = std::time::Instant::now() + DEVICE_WAIT;
         let rollback = loop {
-            match delete_allocation(&adapter, created.adapter_instance, created.device_id) {
+            match delete_allocation(&adapter, created.adapter_instance, created.device_id, false) {
                 Err(error)
                     if volume::is_lock_refusal(&error) && std::time::Instant::now() < deadline =>
                 {
@@ -158,18 +160,18 @@ fn add_disk(
     Ok(())
 }
 
-fn delete_disk(letter: DriveLetter) -> Result<()> {
+fn delete_disk(letter: DriveLetter, force: bool) -> Result<()> {
     if !drive_letter_in_use(letter) {
         bail!("drive {letter} is not mounted");
     }
     info!(%letter, "Resolve disk identity");
-    let _name = get_volume_name(&mount_point(letter))?;
+    let _name = get_volume_name(&mount_point(letter)?)?;
     let volume = open_device(
         &format!(r"\\.\{}:", char::from(letter.as_ascii())),
         GENERIC_READ,
     )
     .context("open target volume for identity")?;
-    let number = volume_disk_number(&volume)?;
+    let number = Volume::disk_number(&volume)?;
     let address = physical_disk_address(number)?;
     drop(volume);
     let mut matched = None;
@@ -196,13 +198,13 @@ fn delete_disk(letter: DriveLetter) -> Result<()> {
         }
     }
     let (_, instance, id) = matched.context("volume is not uniquely owned by WispDisk")?;
-    delete_by_identity(instance, id)?;
+    delete_by_identity(instance, id, force)?;
     info!(%letter, "Wait for drive-letter disappearance");
     wait_for_drive_state(letter, false, DEVICE_WAIT)?;
     Ok(())
 }
 
-fn delete_by_identity(instance: u64, id: u32) -> Result<()> {
+fn delete_by_identity(instance: u64, id: u32, force: bool) -> Result<()> {
     let mut matched = None;
     for adapter in adapters() {
         adapter.require_recovery()?;
@@ -215,12 +217,12 @@ fn delete_by_identity(instance: u64, id: u32) -> Result<()> {
     }
     let adapter =
         matched.context("adapter instance is absent or stale; refresh /list before deletion")?;
-    delete_allocation(&adapter, instance, id)?;
+    delete_allocation(&adapter, instance, id, force)?;
     println!("deleted WispDisk device {id} (adapter instance {instance})");
     Ok(())
 }
 
-fn delete_allocation(adapter: &Adapter, instance: u64, id: u32) -> Result<()> {
+fn delete_allocation(adapter: &Adapter, instance: u64, id: u32, force: bool) -> Result<()> {
     info!(
         adapter_instance = instance,
         device_id = id,
@@ -240,18 +242,18 @@ fn delete_allocation(adapter: &Adapter, instance: u64, id: u32) -> Result<()> {
     let location = disk_location(adapter, entry);
     let number = wait_for_physical_disk(location, DEVICE_WAIT)?;
     info!(disk_number = number, "Open target volumes");
-    let mut volumes = VolumeDeletion::open(number, location)?;
+    let mut deletion = DiskDeletion::open(number, location)?;
     let prepared = (|| {
         info!(disk_number = number, "Lock target volumes");
-        volumes.lock()?;
+        deletion.lock(force)?;
         info!(disk_number = number, "Dismount target volumes");
-        volumes.dismount()?;
+        deletion.dismount()?;
         info!(disk_number = number, "Remove volume mount points");
-        volumes.remove_mounts()
+        deletion.remove_mounts()
     })();
     if let Err(error) = prepared {
         info!(disk_number = number, "Restore volume mount points");
-        return match volumes.restore() {
+        return match deletion.restore() {
             Ok(()) => Err(error),
             Err(restore) => Err(recovery_failed(
                 error,
@@ -272,7 +274,7 @@ fn delete_allocation(adapter: &Adapter, instance: u64, id: u32) -> Result<()> {
             });
         if still_online {
             info!(disk_number = number, "Restore volume mount points");
-            return match volumes.restore() {
+            return match deletion.restore() {
                 Ok(()) => Err(error.context("deletion rejected; original mount points restored")),
                 Err(restore) => Err(recovery_failed(
                     error,
@@ -285,7 +287,7 @@ fn delete_allocation(adapter: &Adapter, instance: u64, id: u32) -> Result<()> {
             "device {id} removal is not confirmed; inspect /list /json before retrying"
         )));
     }
-    drop(volumes);
+    drop(deletion);
     info!(
         device_id = id,
         disk_number = number,

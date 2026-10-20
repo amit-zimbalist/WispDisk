@@ -32,7 +32,14 @@ implementation lives in `cli/src/driver/windows/`:
 - `disk.rs`: disk-interface discovery and SCSI identity checks;
 - `disk_interface_notification.rs`: arrival subscription, callback, and cleanup;
 - `storage.rs`: WMI disk/partition/volume models and provisioning;
-- `volume.rs`: drive-letter state, volume identity, locks, and mount rollback;
+- `volume.rs`: owns `Volume` handles, locks, dismounting, and mount recovery,
+  plus drive-letter state and volume identity helpers;
+- `volume_discovery.rs`: discovers volume names and mount points for inventory
+  and deletion without requiring write access;
+- `volume_finder.rs`: `VolumeFinder` owns the Windows enumeration handle, yields
+  volume names through `Iterator`, and closes the enumeration on drop;
+- `disk_deletion.rs`: `DiskDeletion` coordinates volume preparation and recovery,
+  keeping the lock-all-before-dismount ordering;
 - `win32.rs`: shared handle ownership, device opening, encoding, and errors.
 
 `cli/src/logging.rs` owns the opt-in logging lifetime. Its `subscriber` module
@@ -181,8 +188,11 @@ by its current `PhysicalDriveN` number.
 1. Resolve the drive letter to a single-disk volume, query its SCSI address, and
    match that address uniquely against the driver's live-LUN list to recover the
    stable WispDisk device ID.
-2. Lock and dismount the volume. Refuse deletion when handles remain unless a
-   future explicit force option is designed.
+2. Try to lock every target volume before dismounting. Normally a lock failure
+   refuses deletion. With explicit `/del /force`, log a tracing warning and
+   attempt to dismount even if locking fails; open files may become invalid and unsaved data
+   may be lost. Dismount errors still refuse deletion. Retain volume handles
+   through the driver deletion and track which locks were acquired for recovery.
 3. Remove the mount point.
 4. Mark the LUN as stopping so new I/O fails predictably, drain outstanding
    synchronous SRBs, notify StorPort, and wait for PnP removal.
@@ -282,10 +292,13 @@ and never cause another create. Initialization rollback uses the ordinary safe
 deletion path, including volume locks, driver reconciliation, and PnP checks.
 
 Deletion by adapter instance/device ID enumerates volume GUIDs and mount points,
-matches them by physical disk and verified SCSI location, and locks every target
-volume before dismount/removal. After rejection it restores mounts only when
+matches them by physical disk and verified SCSI location, and attempts to lock
+every target volume before dismount/removal. `/force` bypasses only lock failures
+and is never used by creation rollback. After rejection it restores mounts only when
 inventory confirms that the same allocation remains online. An unresolved
-deletion is reported for subsequent inventory-based recovery.
+deletion is reported for subsequent inventory-based recovery. Mount restoration
+unlocks only volumes whose locks were acquired; it cannot recover application
+handles or data invalidated by a forced dismount.
 
 ## Milestones
 

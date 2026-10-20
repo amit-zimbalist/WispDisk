@@ -22,6 +22,7 @@ time = { version = "=0.3.44", features = ["formatting", "parsing"] }
 serde = { workspace = true }
 wmi = { workspace = true }
 ferrisetw = "1.2"
+widestring = "1.2"
 windows-sys = { version = "0.61.2", features = [
     "Win32_Devices_DeviceAndDriverInstallation",
     "Win32_Foundation",

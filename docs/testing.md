@@ -8,6 +8,9 @@ it for this driver on the host workstation.
 
 - Generation 2 Hyper-V VM with Windows 10 22H2 and a currently serviced Windows
   11 image as separate test targets.
+- For compatibility with early Windows 10, also test x64 guests running the
+  original release and version 1607 (RS1). Verify installation, driver loading,
+  and disk creation and deletion on each; ARM64 support begins with version 1709.
 - Secure Boot configuration compatible with the chosen test-signing method.
 - Kernel dump enabled and a page file large enough to capture it.
 - WinDbg network kernel debugging configured before the first driver load.

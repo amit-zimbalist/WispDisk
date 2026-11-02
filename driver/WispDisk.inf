@@ -9,6 +9,7 @@ PnpLockdown=1
 
 [DestinationDirs]
 WispDisk.CopyFiles=13
+WispDisk.Legacy.CopyFiles=12
 
 [SourceDisksNames]
 1=%InstallDisk%,,,
@@ -17,7 +18,11 @@ WispDisk.CopyFiles=13
 WispDisk.sys=1
 
 [Manufacturer]
-%ProviderName%=WispDisk.Models,NTamd64.10.0...16299,NTarm64.10.0...16299
+%ProviderName%=WispDisk.Models,NTamd64.10.0,NTamd64.10.0...16299,NTarm64.10.0...16299
+
+; Windows 10 before version 1709 does not support running from the Driver Store.
+[WispDisk.Models.NTamd64.10.0]
+%WispDisk.DeviceDesc%=WispDisk.Legacy.Install,ROOT\WISPDISK
 
 [WispDisk.Models.NTamd64.10.0...16299]
 %WispDisk.DeviceDesc%=WispDisk.Install,ROOT\WISPDISK
@@ -28,11 +33,20 @@ WispDisk.sys=1
 [WispDisk.Install.NT]
 CopyFiles=WispDisk.CopyFiles
 
+[WispDisk.Legacy.Install.NT]
+CopyFiles=WispDisk.Legacy.CopyFiles
+
 [WispDisk.CopyFiles]
+WispDisk.sys
+
+[WispDisk.Legacy.CopyFiles]
 WispDisk.sys
 
 [WispDisk.Install.NT.Services]
 AddService=WispDiskVmp,0x00000002,WispDisk.Service
+
+[WispDisk.Legacy.Install.NT.Services]
+AddService=WispDiskVmp,0x00000002,WispDisk.Legacy.Service
 
 [WispDisk.Service]
 DisplayName=%WispDisk.ServiceDesc%
@@ -40,6 +54,15 @@ ServiceType=1
 StartType=3
 ErrorControl=1
 ServiceBinary=%13%\WispDisk.sys
+LoadOrderGroup=SCSI Miniport
+AddReg=WispDisk.Service.AddReg
+
+[WispDisk.Legacy.Service]
+DisplayName=%WispDisk.ServiceDesc%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\WispDisk.sys
 LoadOrderGroup=SCSI Miniport
 AddReg=WispDisk.Service.AddReg
 

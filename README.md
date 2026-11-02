@@ -5,7 +5,7 @@
 </p>
 
 This repository contains a VM-testable alpha of a Windows 10+ volatile virtual
-disk utility:
+disk utility for x64 and ARM64 systems:
 
 - `wispdisk.exe` is a Rust CLI using `clap`.
 - `WispDisk.sys` is a C++ StorPort virtual miniport built with MSVC and the WDK.

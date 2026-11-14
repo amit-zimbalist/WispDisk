@@ -56,11 +56,12 @@ wispdisk.exe /del /letter R
 wispdisk.exe /del /letter R /force
 wispdisk.exe /list /json
 wispdisk.exe /del /adapter <INSTANCE-FROM-LIST> /id <DEVICE-ID>
+wispdisk.exe /recover-provisioning /adapter <INSTANCE-FROM-LIST> /id <DEVICE-ID>
 ```
 
 Rules enforced now:
 
-- exactly one of `/add`, `/del`, and `/list`;
+- exactly one of `/add`, `/del`, `/list`, and `/recover-provisioning`;
 - exactly one of `/hdd` and `/rem` for `/add`;
 - `/letter` is required for creation; deletion takes either `/letter` or both
   `/adapter` and `/id` from inventory;
@@ -89,10 +90,19 @@ without that lock. Warnings follow the selected `/log` level and appear on stdou
 use `/log warn` to display them. Logging is disabled by default. The flag
 acknowledges the risk without an interactive prompt.
 Dismount, identity verification, mount removal, and driver errors still fail the
-operation. Failed creation rollback always uses deletion without force.
+operation.
 Adapter instances change on reinstallation; stale identities are rejected.
 
-The 0.3 CLI requires a driver advertising operation recovery before mutation.
+New allocations remain protected from deletion while the CLI provisions them.
+If provisioning fails or its outcome is uncertain, `/list` shows the disk as
+`provisioning` and the allocation remains protected. After confirming that all
+Windows storage operations for that disk have stopped, use
+`/recover-provisioning /adapter <INSTANCE> /id <DEVICE-ID>` to release the
+protection; then use `/del` if the allocation should be removed. Recovery does
+not cancel or wait for a Windows storage operation.
+
+The CLI requires a driver advertising operation recovery before mutation and
+provisioning protection before creation.
 An older loaded driver must be upgraded explicitly. Ambiguous create/delete
 transport failures are queried by their original operation handle; retries can
 never allocate a duplicate for the same accepted handle. If recovery cannot

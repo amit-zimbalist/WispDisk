@@ -4,7 +4,7 @@ use std::fmt;
 
 use crate::{
     args::MediaKind,
-    protocol::{DiskState, ProtocolMediaKind},
+    protocol::{DISK_STATE_PROVISIONING, DiskState, ProtocolMediaKind},
 };
 use anyhow::Result;
 use serde::{Serialize, Serializer};
@@ -20,6 +20,7 @@ use super::{
 enum InventoryDiskState {
     Online,
     Stopping,
+    Provisioning,
     Unknown,
 }
 
@@ -28,6 +29,7 @@ impl From<u32> for InventoryDiskState {
         match state {
             1 => Self::Online,
             2 => Self::Stopping,
+            DISK_STATE_PROVISIONING => Self::Provisioning,
             _ => Self::Unknown,
         }
     }
@@ -38,6 +40,7 @@ impl fmt::Display for InventoryDiskState {
         formatter.write_str(match self {
             Self::Online => "online",
             Self::Stopping => "stopping",
+            Self::Provisioning => "provisioning",
             Self::Unknown => "unknown",
         })
     }

@@ -12,6 +12,7 @@ struct LunView {
     ULONGLONG sizeBytes{};
     ULONG mediaKind{};
     ULONG deviceId{};
+    ULONGLONG adapterInstance{};
 };
 
 class LunIoLease final {

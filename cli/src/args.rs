@@ -12,8 +12,8 @@ const LOGICAL_SECTOR_SIZE: u64 = 512;
     name = "wispdisk",
     version,
     about = "Create and remove volatile virtual disks on Windows",
-    override_usage = "wispdisk.exe /add (/hdd|/rem) /letter <LETTER> /size <SIZE> [/fs <FAT|FAT32|NTFS>]\n       wispdisk.exe /del /letter <LETTER> [/force]\n       wispdisk.exe /del /adapter <INSTANCE> /id <ID> [/force]\n       wispdisk.exe /list [/json]",
-    group(ArgGroup::new("operation").required(true).multiple(false).args(["add", "delete", "list"])),
+    override_usage = "wispdisk.exe /add (/hdd|/rem) /letter <LETTER> /size <SIZE> [/fs <FAT|FAT32|NTFS>]\n       wispdisk.exe /del /letter <LETTER> [/force]\n       wispdisk.exe /del /adapter <INSTANCE> /id <ID> [/force]\n       wispdisk.exe /recover-provisioning /adapter <INSTANCE> /id <ID>\n       wispdisk.exe /list [/json]",
+    group(ArgGroup::new("operation").required(true).multiple(false).args(["add", "delete", "list", "recover_provisioning"])),
     group(ArgGroup::new("media").multiple(false).args(["hdd", "removable"]))
 )]
 pub struct Cli {
@@ -32,6 +32,10 @@ pub struct Cli {
     /// List driver allocations, including unformatted and unmounted disks.
     #[arg(long)]
     list: bool,
+
+    /// Release a stranded provisioning guard after Windows storage operations have stopped.
+    #[arg(long)]
+    recover_provisioning: bool,
 
     /// Return inventory as JSON (only with /list).
     #[arg(long)]
@@ -74,6 +78,23 @@ impl Cli {
     pub fn into_command(self) -> Result<Command, ValidationError> {
         if self.force && !self.delete {
             return Err(ValidationError::ForceWithoutDelete);
+        }
+        if self.recover_provisioning {
+            if self.json
+                || self.letter.is_some()
+                || self.size.is_some()
+                || self.file_system.is_some()
+                || self.hdd
+                || self.removable
+            {
+                return Err(ValidationError::UnexpectedOptions);
+            }
+            return match (self.adapter, self.id) {
+                (Some(adapter), Some(id)) if adapter != 0 && id != 0 => {
+                    Ok(Command::RecoverProvisioning { adapter, id })
+                }
+                _ => Err(ValidationError::DeleteIdentity),
+            };
         }
         if self.list {
             if self.letter.is_some()
@@ -150,6 +171,10 @@ impl Cli {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Command {
+    RecoverProvisioning {
+        adapter: u64,
+        id: u32,
+    },
     List {
         json: bool,
     },
@@ -173,6 +198,10 @@ pub enum Command {
 impl fmt::Display for Command {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::RecoverProvisioning { adapter, id } => write!(
+                formatter,
+                "recover provisioning for device {id} on adapter instance {adapter}"
+            ),
             Self::List { .. } => formatter.write_str("list WispDisk allocations"),
             Self::DeleteId { adapter, id, force } => write!(
                 formatter,
@@ -383,6 +412,7 @@ fn normalize_one(argument: OsString) -> OsString {
         .map_or((slash_option, None), |(name, value)| (name, Some(value)));
     let canonical = match name.to_ascii_lowercase().as_str() {
         "list" => "list",
+        "recover-provisioning" => "recover-provisioning",
         "json" => "json",
         "id" => "id",
         "adapter" => "adapter",
@@ -450,6 +480,47 @@ mod tests {
                 id: 7,
                 force: false,
             })
+        );
+    }
+
+    #[test]
+    fn recovery_requires_an_exact_allocation_identity() {
+        assert_eq!(
+            parse(&[
+                "wispdisk.exe",
+                "/recover-provisioning",
+                "/adapter:123",
+                "/id:7"
+            ])
+            .into_command(),
+            Ok(Command::RecoverProvisioning {
+                adapter: 123,
+                id: 7
+            })
+        );
+        for arguments in [
+            vec!["wispdisk.exe", "/recover-provisioning", "/id:7"],
+            vec![
+                "wispdisk.exe",
+                "/recover-provisioning",
+                "/adapter:123",
+                "/id:0",
+            ],
+        ] {
+            assert_eq!(
+                parse(&arguments).into_command(),
+                Err(ValidationError::DeleteIdentity)
+            );
+        }
+        assert!(
+            Cli::try_parse_from(normalize_windows_args([
+                "wispdisk.exe",
+                "/recover-provisioning",
+                "/del",
+                "/adapter:123",
+                "/id:7"
+            ]))
+            .is_err()
         );
     }
 

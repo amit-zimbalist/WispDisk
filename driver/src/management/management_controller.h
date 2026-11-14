@@ -37,6 +37,8 @@ public:
     QueryOperation(ULONGLONG instance, ULONGLONG operation, OperationResult& result) const noexcept;
     _IRQL_requires_max_(DISPATCH_LEVEL)
     void SnapshotState(WISPDISK_STATE_RESPONSE& response) const noexcept;
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    [[nodiscard]] NTSTATUS FinishProvisioning(ULONGLONG instance, ULONG deviceId) const noexcept;
 
     // Requests have been validated by the protocol layer. A successful queue
     // transfers SRB ownership to the worker; Complete means a response is ready.
@@ -65,7 +67,7 @@ public:
 
 private:
     struct MutationCommand {
-        // The submission overloads select one of the four mutation operations.
+        // The submission overloads select the validated mutation operation.
         WISPDISK_CONTROL_CODE operation;
         WISPDISK_OPERATION_REQUEST identity;
         WISPDISK_CREATE_REQUEST create;

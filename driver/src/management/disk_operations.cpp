@@ -34,7 +34,8 @@ void HandleQueryVersion(_In_ const ControlRequest& controlRequest) noexcept {
         .VersionMajor = 0,
         .VersionMinor = 3,
         .Capabilities = WISPDISK_CAP_CREATE_DELETE | WISPDISK_CAP_READ_WRITE |
-                        WISPDISK_CAP_REMOVABLE | WISPDISK_CAP_OPERATION_RECOVERY,
+                        WISPDISK_CAP_REMOVABLE | WISPDISK_CAP_OPERATION_RECOVERY |
+                        WISPDISK_CAP_PROVISIONING_GUARD,
         .MaximumDiskCount = kMaximumDiskCount,
     };
     controlRequest.WriteResponse(response, STATUS_SUCCESS);

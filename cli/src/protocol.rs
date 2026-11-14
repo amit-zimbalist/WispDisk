@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use crate::args::MediaKind;
+
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const SRB_SIGNATURE: [u8; 8] = *b"WISPDK01";
 pub const MAXIMUM_DISK_COUNT: usize = 16;
@@ -8,6 +10,8 @@ pub const CAP_CREATE_DELETE: u32 = 0x0000_0001;
 pub const CAP_READ_WRITE: u32 = 0x0000_0002;
 pub const CAP_REMOVABLE: u32 = 0x0000_0004;
 pub const CAP_OPERATION_RECOVERY: u32 = 0x0000_0008;
+pub const CAP_PROVISIONING_GUARD: u32 = 0x0000_0010;
+pub const DISK_STATE_PROVISIONING: u32 = 3;
 
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -21,6 +25,8 @@ pub enum Operation {
     CreateReserved = 0x806,
     DeleteReserved = 0x807,
     ListState = 0x808,
+    CreateProvisioning = 0x809,
+    FinishProvisioning = 0x80a,
 }
 
 #[repr(u32)]
@@ -28,6 +34,15 @@ pub enum Operation {
 pub enum ProtocolMediaKind {
     Fixed = 1,
     Removable = 2,
+}
+
+impl From<MediaKind> for ProtocolMediaKind {
+    fn from(media: MediaKind) -> Self {
+        match media {
+            MediaKind::Fixed => Self::Fixed,
+            MediaKind::Removable => Self::Removable,
+        }
+    }
 }
 
 #[repr(C)]
@@ -160,6 +175,15 @@ pub struct ReservedDeleteRequest {
     pub reserved: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct FinishProvisioningRequest {
+    pub header: RequestHeader,
+    pub adapter_instance: u64,
+    pub device_id: u32,
+    pub reserved: u32,
+}
+
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OperationState {
@@ -247,6 +271,7 @@ const _: [(); 32] = [(); size_of::<ReserveRequest>()];
 const _: [(); 40] = [(); size_of::<OperationRequest>()];
 const _: [(); 64] = [(); size_of::<ReservedCreateRequest>()];
 const _: [(); 48] = [(); size_of::<ReservedDeleteRequest>()];
+const _: [(); 40] = [(); size_of::<FinishProvisioningRequest>()];
 const _: [(); 64] = [(); size_of::<OperationResponse>()];
 const _: [(); 48] = [(); size_of::<DiskState>()];
 const _: [(); 816] = [(); size_of::<StateResponse>()];

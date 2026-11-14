@@ -43,7 +43,7 @@ impl<O: ControlOperation<Response = OperationResponse>> RecoveryAttempt
 {
     fn submit(&mut self) -> Result<OperationResponse> {
         let action = match O::CODE {
-            Operation::CreateReserved => "create",
+            Operation::CreateReserved | Operation::CreateProvisioning => "create",
             Operation::DeleteReserved => "delete",
             _ => "management",
         };

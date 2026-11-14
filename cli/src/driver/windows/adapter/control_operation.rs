@@ -1,8 +1,9 @@
 //! Typed control operations and the wire-layout contracts used by transport.
 
 use crate::protocol::{
-    Operation, OperationRequest, OperationResponse, QueryVersionResponse, RequestHeader,
-    ReserveRequest, ReservedCreateRequest, ReservedDeleteRequest, ResponseHeader, StateResponse,
+    FinishProvisioningRequest, Operation, OperationRequest, OperationResponse,
+    QueryVersionResponse, RequestHeader, ReserveRequest, ReservedCreateRequest,
+    ReservedDeleteRequest, ResponseHeader, StateResponse,
 };
 
 /// Bind an operation code to its wire request and response types.
@@ -49,13 +50,22 @@ impl ControlOperation for ListState {
     const CODE: Operation = Operation::ListState;
 }
 
-pub(super) struct CreateReserved;
+pub(super) struct CreateProvisioning;
 
-impl ControlOperation for CreateReserved {
+impl ControlOperation for CreateProvisioning {
     type Request = ReservedCreateRequest;
     type Response = OperationResponse;
 
-    const CODE: Operation = Operation::CreateReserved;
+    const CODE: Operation = Operation::CreateProvisioning;
+}
+
+pub(super) struct FinishProvisioning;
+
+impl ControlOperation for FinishProvisioning {
+    type Request = FinishProvisioningRequest;
+    type Response = ResponseHeader;
+
+    const CODE: Operation = Operation::FinishProvisioning;
 }
 
 pub(super) struct DeleteReserved;
@@ -120,6 +130,13 @@ unsafe impl ProtocolRequest for ReservedDeleteRequest {
     }
 }
 
+// SAFETY: FinishProvisioningRequest is repr(C), has no padding, and uses integer fields.
+unsafe impl ProtocolRequest for FinishProvisioningRequest {
+    fn request_header(&self) -> &RequestHeader {
+        &self.header
+    }
+}
+
 // SAFETY: QueryVersionResponse is repr(C), contains only integer aggregates, and starts with ResponseHeader.
 unsafe impl ProtocolResponse for QueryVersionResponse {
     fn response_header(&self) -> &ResponseHeader {
@@ -138,5 +155,12 @@ unsafe impl ProtocolResponse for OperationResponse {
 unsafe impl ProtocolResponse for StateResponse {
     fn response_header(&self) -> &ResponseHeader {
         &self.header
+    }
+}
+
+// SAFETY: ResponseHeader is repr(C) and contains only integer fields.
+unsafe impl ProtocolResponse for ResponseHeader {
+    fn response_header(&self) -> &ResponseHeader {
+        self
     }
 }

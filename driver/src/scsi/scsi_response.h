@@ -13,6 +13,7 @@ void WriteBigEndian16(_Out_writes_(2) UCHAR* destination, _In_ USHORT value) noe
 void WriteBigEndian32(_Out_writes_(4) UCHAR* destination, _In_ ULONG value) noexcept;
 void WriteBigEndian64(_Out_writes_(8) UCHAR* destination, _In_ ULONGLONG value) noexcept;
 void WriteDeviceIdHex(_Out_writes_(8) UCHAR* destination, _In_ ULONG deviceId) noexcept;
+void WriteAdapterIdHex(_Out_writes_(16) UCHAR* destination, _In_ ULONGLONG adapterId) noexcept;
 
 [[nodiscard]] UCHAR SetSense(
     _Inout_ PSCSI_REQUEST_BLOCK srb,

@@ -61,24 +61,26 @@ UCHAR HandleInquiry(_In_ const LunView& view, _Inout_ PSCSI_REQUEST_BLOCK srb) n
     } else if (pageCode == kVpdUnitSerialNumber) {
         response[0] = kDirectAccessDevice;
         response[1] = kVpdUnitSerialNumber;
-        response[3] = 14;
+        response[3] = 30;
         static constexpr UCHAR prefix[6] = {'W', 'I', 'S', 'P', 'D', 'K'};
         RtlCopyMemory(&response[4], prefix, sizeof(prefix));
-        WriteDeviceIdHex(&response[10], view.deviceId);
-        responseLength = 18;
+        WriteAdapterIdHex(&response[10], view.adapterInstance);
+        WriteDeviceIdHex(&response[26], view.deviceId);
+        responseLength = 34;
     } else if (pageCode == kVpdDeviceIdentification) {
         response[0] = kDirectAccessDevice;
         response[1] = kVpdDeviceIdentification;
         response[4] = 0x02; // ASCII.
         response[5] = 0x01; // T10 vendor identifier, associated with the LUN.
-        response[7] = 22;
+        response[7] = 38;
         static constexpr UCHAR vendor[8] = {'W', 'I', 'S', 'P', 'D', 'I', 'S', 'K'};
         static constexpr UCHAR prefix[6] = {'W', 'I', 'S', 'P', 'D', 'K'};
         RtlCopyMemory(&response[8], vendor, sizeof(vendor));
         RtlCopyMemory(&response[16], prefix, sizeof(prefix));
-        WriteDeviceIdHex(&response[22], view.deviceId);
-        WriteBigEndian16(&response[2], 26);
-        responseLength = 30;
+        WriteAdapterIdHex(&response[22], view.adapterInstance);
+        WriteDeviceIdHex(&response[38], view.deviceId);
+        WriteBigEndian16(&response[2], 42);
+        responseLength = 46;
     } else {
         return SetSense(srb, SCSI_SENSE_ILLEGAL_REQUEST, SCSI_ADSENSE_INVALID_CDB);
     }

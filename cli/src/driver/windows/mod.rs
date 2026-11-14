@@ -3,6 +3,7 @@
 mod adapter;
 mod disk;
 mod inventory;
+mod mutation_lock;
 mod recovery;
 mod volume;
 mod win32;
@@ -25,6 +26,13 @@ pub(super) fn is_unresolved(error: &anyhow::Error) -> bool {
 }
 
 pub(super) fn execute(command: &Command) -> Result<()> {
+    // Coordinate CLI-side work that the driver's per-disk guard cannot:
+    // installation, volume preparation, and recovery racing active setup.
+    // The driver independently protects provisioning from ordinary deletion.
+    let _mutation = match command {
+        Command::List { .. } => None,
+        _ => Some(mutation_lock::MutationLock::acquire()?),
+    };
     match command {
         Command::Add {
             letter,
@@ -34,6 +42,7 @@ pub(super) fn execute(command: &Command) -> Result<()> {
         } => add_disk(*letter, *media, *size_bytes, *file_system),
         Command::Delete { letter, force } => delete_disk(*letter, *force),
         Command::DeleteId { adapter, id, force } => delete_by_identity(*adapter, *id, *force),
+        Command::RecoverProvisioning { adapter, id } => disk::recover_provisioning(*adapter, *id),
         Command::List { json } => list_inventory(*json),
     }
 }

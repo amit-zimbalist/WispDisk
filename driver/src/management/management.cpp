@@ -61,7 +61,11 @@ static WispDiskIoControlDisposition DispatchControlRequest(
             HandleListState(adapter, control);
             return WispDiskIoControlDisposition::Complete;
         case WispDiskControlCreateReserved:
+        case WispDiskControlCreateProvisioning:
             return HandleReservedCreateControl(adapter, control);
+        case WispDiskControlFinishProvisioning:
+            HandleFinishProvisioning(adapter, control);
+            return WispDiskIoControlDisposition::Complete;
         case WispDiskControlDeleteReserved:
             return HandleReservedDeleteControl(adapter, control);
         case WispDiskControlQueryVersion:

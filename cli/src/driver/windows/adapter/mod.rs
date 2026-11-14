@@ -8,8 +8,8 @@ pub(super) use self::install::install_embedded_driver;
 
 use self::{
     control_operation::{
-        ControlOperation, CreateReserved, DeleteReserved, ListState, ProtocolRequest,
-        ProtocolResponse, QueryResult, QueryVersion, ReserveOperation,
+        ControlOperation, CreateProvisioning, DeleteReserved, FinishProvisioning, ListState,
+        ProtocolRequest, ProtocolResponse, QueryResult, QueryVersion, ReserveOperation,
     },
     reserved_operation::ReservedOperation,
 };
@@ -31,8 +31,8 @@ use windows_sys::Win32::{
 };
 
 use crate::protocol::{
-    CAP_OPERATION_RECOVERY, OperationRequest, OperationResponse, ReserveRequest,
-    ReservedCreateRequest, ReservedDeleteRequest, StateResponse,
+    CAP_OPERATION_RECOVERY, CAP_PROVISIONING_GUARD, FinishProvisioningRequest, OperationRequest,
+    OperationResponse, ReserveRequest, ReservedCreateRequest, ReservedDeleteRequest, StateResponse,
 };
 
 use crate::{
@@ -112,6 +112,26 @@ impl Adapter {
         Ok(())
     }
 
+    pub(super) fn require_provisioning_guard(&self) -> Result<()> {
+        if self.query_version()?.capabilities & CAP_PROVISIONING_GUARD == 0 {
+            bail!(
+                "loaded WispDisk driver lacks provisioning protection; upgrade the driver before creating disks"
+            );
+        }
+        Ok(())
+    }
+
+    pub(super) fn finish_provisioning(&self, instance: u64, device_id: u32) -> Result<()> {
+        let request = FinishProvisioningRequest {
+            header: request_header::<FinishProvisioning>(),
+            adapter_instance: instance,
+            device_id,
+            reserved: 0,
+        };
+        self.send::<FinishProvisioning>(&request)?;
+        Ok(())
+    }
+
     fn reserve_operation(&self, mutation: Operation) -> Result<OperationHandle> {
         self.require_recovery()?;
         let request = ReserveRequest {
@@ -156,18 +176,16 @@ impl Adapter {
     ) -> Result<CreatedDisk> {
         let handle = self.reserve_operation(Operation::CreateDisk)?;
         let request = ReservedCreateRequest {
-            operation: operation_request::<CreateReserved>(handle),
+            operation: operation_request::<CreateProvisioning>(handle),
             size_bytes,
             logical_sector_size: LOGICAL_SECTOR_SIZE,
-            media_kind: match media {
-                MediaKind::Fixed => ProtocolMediaKind::Fixed as u32,
-                MediaKind::Removable => ProtocolMediaKind::Removable as u32,
-            },
+            media_kind: ProtocolMediaKind::from(media) as u32,
             requested_drive_letter: u16::from(letter.as_ascii()),
             reserved16: 0,
             reserved32: 0,
         };
-        let response = self.recover::<CreateReserved>(handle, Operation::CreateDisk, request)?;
+        let response =
+            self.recover::<CreateProvisioning>(handle, Operation::CreateDisk, request)?;
         CreatedDisk::try_from(response).context(UnresolvedOutcome(handle))
     }
 
@@ -466,11 +484,11 @@ mod tests {
 
     #[test]
     fn request_headers_preserve_layout_and_unique_correlation_ids() {
-        let first = request_header::<CreateReserved>();
-        let second = request_header::<CreateReserved>();
+        let first = request_header::<CreateProvisioning>();
+        let second = request_header::<CreateProvisioning>();
         assert_eq!(first.struct_size, size_of::<ReservedCreateRequest>() as u32);
         assert_eq!(first.protocol_version, PROTOCOL_VERSION);
-        assert_eq!(first.operation, Operation::CreateReserved as u32);
+        assert_eq!(first.operation, Operation::CreateProvisioning as u32);
         assert_eq!(first.flags, 0);
         assert_ne!(first.correlation_id, second.correlation_id);
         assert_eq!(first.request_header().correlation_id, first.correlation_id);

@@ -1,22 +1,22 @@
 //! Create, initialize, and recover a new WispDisk allocation.
 
-use anyhow::{Result, bail};
-use tracing::{info, warn};
+use anyhow::{Context, Result, bail};
+use tracing::info;
 
 use crate::{
     args::{DriveLetter, FileSystem, MediaKind},
-    protocol::{CAP_CREATE_DELETE, CAP_READ_WRITE},
+    protocol::{CAP_CREATE_DELETE, CAP_PROVISIONING_GUARD, CAP_READ_WRITE},
 };
 
 use super::super::{
-    DEVICE_WAIT, RETRY_INTERVAL,
+    DEVICE_WAIT,
     adapter::{Adapter, CreatedDisk, adapters, install_embedded_driver, wait_for_adapter},
-    recovery::recovery_failed,
-    volume::{self, ensure_drive_letter_available, verify_mounted_drive, wait_for_drive_state},
+    volume::{ensure_drive_letter_available, verify_mounted_drive, wait_for_drive_state},
 };
 
 use super::{
-    ScsiLocation, provisioning::initialize_and_format, removal::delete_allocation,
+    ScsiLocation,
+    provisioning::{ProvisioningTarget, initialize_and_format},
     verify_physical_disk_location, wait_for_physical_disk,
 };
 
@@ -43,24 +43,36 @@ pub(in crate::driver::windows) fn add_disk(
         bail!("loaded driver does not support removable-media disks");
     }
 
-    adapter.require_recovery()?;
+    if version.capabilities & CAP_PROVISIONING_GUARD == 0 {
+        bail!(
+            "loaded WispDisk driver lacks provisioning protection; upgrade the driver before creating disks"
+        );
+    }
     let created = adapter.create_disk(letter, media, size_bytes)?;
+    let instance = created.adapter_instance;
+    let device_id = created.device_id;
     info!(
-        adapter_instance = created.adapter_instance,
-        device_id = created.device_id,
-        size_bytes,
-        "Disk allocation created"
+        adapter_instance = instance,
+        device_id, size_bytes, "Disk allocation created"
     );
 
-    if let Err(error) =
-        initialize_created_disk(&adapter, &created, letter, media, size_bytes, file_system)
-    {
-        return Err(rollback_created_disk(&adapter, &created, error));
-    }
+    // The driver keeps the allocation protected if setup fails or the CLI exits
+    // while Windows may still be provisioning it.
+    initialize_created_disk(&adapter, &created, letter, media, size_bytes, file_system)
+        .with_context(|| {
+            format!(
+                "provisioning did not complete; device {device_id} on adapter instance {instance} remains protected. After confirming Windows storage operations have stopped, use /recover-provisioning /adapter:{instance} /id:{device_id}"
+            )
+        })?;
+    adapter.finish_provisioning(instance, device_id).with_context(|| {
+        format!(
+            "could not confirm provisioning completion for device {device_id} on adapter instance {instance}; inspect /list and use /recover-provisioning if it remains protected"
+        )
+    })?;
 
     println!(
         "created {} WispDisk {} ({size_bytes} bytes, {file_system}, device id {})",
-        media, letter, created.device_id
+        media, letter, device_id
     );
     Ok(())
 }
@@ -80,12 +92,15 @@ fn initialize_created_disk(
     info!(disk_number, "Verify disk identity");
     verify_physical_disk_location(disk_number, location)?;
     initialize_and_format(
-        disk_number,
+        &ProvisioningTarget {
+            adapter,
+            created,
+            disk_number,
+            location,
+        },
         letter,
         media,
         size_bytes,
-        created.device_id,
-        location,
         file_system,
     )?;
     info!(%letter, "Wait for drive letter");
@@ -93,42 +108,6 @@ fn initialize_created_disk(
     info!(%letter, disk_number, "Verify mounted drive");
     verify_mounted_drive(letter, disk_number, location)?;
     Ok(())
-}
-
-fn rollback_created_disk(
-    adapter: &Adapter,
-    created: &CreatedDisk,
-    error: anyhow::Error,
-) -> anyhow::Error {
-    warn!(
-        adapter_instance = created.adapter_instance,
-        device_id = created.device_id,
-        error = %format_args!("{error:#}"),
-        "Disk setup failed; roll back allocation"
-    );
-    let deadline = std::time::Instant::now() + DEVICE_WAIT;
-    let rollback = loop {
-        match delete_allocation(adapter, created.adapter_instance, created.device_id, false) {
-            Err(error)
-                if volume::is_lock_refusal(&error) && std::time::Instant::now() < deadline =>
-            {
-                std::thread::sleep(RETRY_INTERVAL);
-            }
-            result => break result,
-        }
-    };
-    match rollback {
-        Ok(()) => error
-            .context("failed to initialize the new disk; the driver allocation was rolled back"),
-        Err(rollback_error) => recovery_failed(
-            error,
-            format!(
-                "failed to initialize device {} on adapter instance {}; driver rollback also failed",
-                created.device_id, created.adapter_instance
-            ),
-            rollback_error,
-        ),
-    }
 }
 
 fn expected_location(adapter: &Adapter, created: &CreatedDisk) -> ScsiLocation {

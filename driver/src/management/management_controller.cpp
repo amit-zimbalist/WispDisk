@@ -8,14 +8,21 @@ namespace wispdisk::management {
 
 using diagnostics::TracePhase;
 
+static bool IsReservedMutation(ULONG operation) noexcept {
+    return operation == WispDiskControlCreateReserved ||
+           operation == WispDiskControlCreateProvisioning ||
+           operation == WispDiskControlDeleteReserved;
+}
+
 bool ManagementController::MutationCommand::IsReserved() const noexcept {
-    return operation == WispDiskControlCreateReserved || operation == WispDiskControlDeleteReserved;
+    return IsReservedMutation(operation);
 }
 
 ULONG ManagementController::MutationCommand::Mutation() const noexcept {
     switch (operation) {
         case WispDiskControlCreateDisk:
         case WispDiskControlCreateReserved:
+        case WispDiskControlCreateProvisioning:
             return WispDiskControlCreateDisk;
         case WispDiskControlDeleteDisk:
         case WispDiskControlDeleteReserved:
@@ -174,6 +181,32 @@ void ManagementController::SnapshotState(WISPDISK_STATE_RESPONSE& response) cons
     storage::LunStore{extension_}.SnapshotStateLocked(response, lock);
 }
 
+_Use_decl_annotations_
+NTSTATUS
+ManagementController::FinishProvisioning(ULONGLONG instance, ULONG deviceId) const noexcept {
+    support::ScopedSpinLock lock{&extension_.LunLock};
+    if (instance != extension_.AdapterInstance) {
+        return STATUS_NOT_FOUND;
+    }
+    if (extension_.AdapterStopping != 0) {
+        return STATUS_DEVICE_NOT_READY;
+    }
+    for (auto& lun : extension_.Luns) {
+        if (lun.State != WispDiskLunState::Online || lun.DeviceId != deviceId) {
+            continue;
+        }
+        const auto* record = FindOperationLocked(lun.CreateOperationId, lock);
+        if (record == nullptr || record->State != WispDiskOperationSucceeded ||
+            record->Mutation != WispDiskControlCreateDisk || record->DeviceId != deviceId ||
+            !record->ProvisioningProtected) {
+            return STATUS_INVALID_DEVICE_STATE;
+        }
+        lun.ProvisioningProtected = false;
+        return STATUS_SUCCESS;
+    }
+    return STATUS_NOT_FOUND;
+}
+
 NTSTATUS
 ManagementController::BeginManagementLocked(const support::ScopedSpinLock& lock) const noexcept {
     lock.AssertProtects(&extension_.LunLock);
@@ -214,12 +247,14 @@ NTSTATUS ManagementController::BindOperationLocked(
     if (record->Mutation != command.Mutation()) {
         return STATUS_INVALID_PARAMETER;
     }
+    const bool protectProvisioning = command.operation == WispDiskControlCreateProvisioning;
     if (record->State != WispDiskOperationReserved) {
         if (command.Mutation() == WispDiskControlCreateDisk) {
             if (record->Create.SizeBytes != command.create.SizeBytes ||
                 record->Create.MediaKind != command.create.MediaKind ||
                 record->Create.RequestedDriveLetter != command.create.RequestedDriveLetter ||
-                record->Create.LogicalSectorSize != command.create.LogicalSectorSize) {
+                record->Create.LogicalSectorSize != command.create.LogicalSectorSize ||
+                record->ProvisioningProtected != protectProvisioning) {
                 return STATUS_INVALID_PARAMETER;
             }
         } else if (record->Delete.DeviceId != command.remove.DeviceId) {
@@ -230,6 +265,7 @@ NTSTATUS ManagementController::BindOperationLocked(
     }
     record->Create = command.create;
     record->Delete = command.remove;
+    record->ProvisioningProtected = protectProvisioning;
     if (command.Mutation() == WispDiskControlDeleteDisk) {
         record->DeviceId = command.remove.DeviceId;
     }
@@ -300,7 +336,9 @@ WispDiskIoControlDisposition ManagementController::SubmitCreate(
     const WISPDISK_CREATE_REQUEST& request) const noexcept {
     return Submit(
         control,
-        {.operation = WispDiskControlCreateReserved, .identity = identity, .create = request});
+        {.operation = static_cast<WISPDISK_CONTROL_CODE>(control.ioControl->ControlCode),
+         .identity = identity,
+         .create = request});
 }
 
 _Use_decl_annotations_
@@ -434,14 +472,15 @@ void ManagementController::MarkCreatesDeletedLocked(
 _Use_decl_annotations_
 NTSTATUS ManagementController::DeleteDisk(ULONG deviceId) const noexcept {
     const storage::LunStore disks{extension_};
-    auto* lun = disks.MarkLunStopping(deviceId);
-    if (lun == nullptr) {
+    PWISPDISK_LUN lun = nullptr;
+    const NTSTATUS status = disks.MarkLunStopping(deviceId, lun);
+    if (!NT_SUCCESS(status)) {
         WARN(
-            "DeleteUnknownDisk",
+            "DeleteRejected",
             .AdapterInstance = extension_.AdapterInstance,
             .DeviceId = deviceId,
-            .Status = STATUS_NO_SUCH_DEVICE);
-        return STATUS_NO_SUCH_DEVICE;
+            .Status = status);
+        return status;
     }
     disks.DrainAndFreeBacking(*lun, deviceId);
     FinalizeDiskRemoval(*lun, deviceId);
@@ -465,7 +504,7 @@ void ManagementController::ProcessLegacyRequest(const ControlRequest& control) c
         ULONG deviceId = 0;
         UCHAR lun = 0;
         if (NT_SUCCESS(status)) {
-            status = storage::LunStore{extension_}.CreateDisk(request, deviceId, lun);
+            status = storage::LunStore{extension_}.CreateDisk(request, false, deviceId, lun);
         }
         WriteCreateResponse(control, request, status, deviceId, lun);
     } else {
@@ -507,6 +546,7 @@ void ManagementController::ProcessReservedRequest(const ControlRequest& control)
     if (snapshot.Mutation == WispDiskControlCreateDisk) {
         snapshot.Result = storage::LunStore{extension_}.CreateDisk(
             snapshot.Create,
+            snapshot.ProvisioningProtected,
             snapshot.DeviceId,
             snapshot.Lun);
     } else {
@@ -548,9 +588,8 @@ void ManagementController::PublishOperationResult(
 _Use_decl_annotations_
 void ManagementController::ProcessWorkItem(PSCSI_REQUEST_BLOCK srb) const noexcept {
     const auto control = ControlRequest::FromSrb(srb);
+    const bool reserved = control && IsReservedMutation(control.ioControl->ControlCode);
     if (control) {
-        const bool reserved = control.ioControl->ControlCode == WispDiskControlCreateReserved ||
-                              control.ioControl->ControlCode == WispDiskControlDeleteReserved;
         WISPDISK_OPERATION_REQUEST identity{};
         if (reserved) {
             RtlCopyMemory(&identity, control.payload, sizeof(identity));
@@ -596,17 +635,12 @@ void ManagementController::ProcessWorkItem(PSCSI_REQUEST_BLOCK srb) const noexce
     // Copy all metadata before completion transfers SRB ownership to StorPort.
     bool busChanged = control &&
                       control.ioControl->ReturnCode == static_cast<ULONG>(STATUS_SUCCESS) &&
-                      (control.ioControl->ControlCode == WispDiskControlCreateDisk ||
-                       control.ioControl->ControlCode == WispDiskControlDeleteDisk ||
-                       control.ioControl->ControlCode == WispDiskControlCreateReserved ||
-                       control.ioControl->ControlCode == WispDiskControlDeleteReserved);
+                      (reserved || control.ioControl->ControlCode == WispDiskControlCreateDisk ||
+                       control.ioControl->ControlCode == WispDiskControlDeleteDisk);
     ULONGLONG operationId = 0;
     ULONG deviceId = 0;
     NTSTATUS resultStatus = STATUS_INVALID_DEVICE_REQUEST;
-    if (control &&
-        (control.ioControl->ControlCode == WispDiskControlCreateReserved ||
-         control.ioControl->ControlCode == WispDiskControlDeleteReserved) &&
-        control.ioControl->Length == sizeof(WISPDISK_OPERATION_RESPONSE)) {
+    if (reserved && control.ioControl->Length == sizeof(WISPDISK_OPERATION_RESPONSE)) {
         WISPDISK_OPERATION_RESPONSE response{};
         RtlCopyMemory(&response, control.payload, sizeof(response));
         operationId = response.OperationId;

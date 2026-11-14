@@ -68,6 +68,17 @@ for FAT, FAT32, and NTFS, with both fixed and removable disks:
 - Verify dismount and mount-removal failures still prevent driver deletion, and
   stale adapter/device identities remain rejected with `/force`.
 
+## Provisioning identity verification
+
+In a disposable VM, run add and delete from separate elevated CLI processes and
+confirm deletion waits until provisioning (including rollback) has finished.
+Terminate a process while it holds the mutation lock and confirm a later command
+can acquire the abandoned lock. Repeat creation for fixed and removable disks
+with FAT, FAT32, and NTFS, checking that the partition-to-volume association and
+extent validation succeed. In a test build, change the selected volume or
+allocation identity before the relevant check and confirm provisioning refuses
+the operation without formatting the replacement.
+
 ## Signing in the guest
 
 Use a dedicated, disposable test certificate. Sign the catalog, install only

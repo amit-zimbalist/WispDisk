@@ -16,7 +16,9 @@ use super::super::{
 };
 
 use super::{
-    ScsiLocation, provisioning::initialize_and_format, removal::delete_allocation,
+    ScsiLocation,
+    provisioning::{ProvisioningTarget, initialize_and_format},
+    removal::delete_allocation,
     verify_physical_disk_location, wait_for_physical_disk,
 };
 
@@ -80,12 +82,15 @@ fn initialize_created_disk(
     info!(disk_number, "Verify disk identity");
     verify_physical_disk_location(disk_number, location)?;
     initialize_and_format(
-        disk_number,
+        &ProvisioningTarget {
+            adapter,
+            created,
+            disk_number,
+            location,
+        },
         letter,
         media,
         size_bytes,
-        created.device_id,
-        location,
         file_system,
     )?;
     info!(%letter, "Wait for drive letter");

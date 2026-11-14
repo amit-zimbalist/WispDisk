@@ -98,6 +98,15 @@ Protocol responses expose validation methods for their specific meaning.
 identity matching stays in recovery, and failed create conversion retains the
 original unresolved-operation handle.
 
+CLI add and delete commands hold a machine-wide named mutex from before
+adapter discovery until provisioning, deletion, or rollback finishes. This
+serializes mutations from cooperating CLI processes, including across sessions;
+an abandoned mutex is released by Windows when its owner exits. Before storage
+mutations, provisioning checks that the original adapter instance and device ID
+are still online at the expected SCSI address. The mutex does not coordinate
+older clients, direct miniport protocol callers, or external device removal;
+those can still race a check and a subsequent Windows storage operation.
+
 ### Miniport adapter context
 
 The adapter components are non-owning views over StorPort's plain extension
@@ -177,7 +186,9 @@ shared names in `management/diagnostics.h`; their numeric wire values stay fixed
    partition object returned by the create operation instead of waiting for a
    second provider-cache query.
 
-Immediately before formatting, revalidate the physical disk's SCSI address.
+Resolve the volume through the created partition's WMI association, and check
+its disk extent against that partition before formatting the returned volume
+object. Before formatting, revalidate the allocation and physical disk address.
 The WMI provisioning layer rejects an unexpected partition style, boot/system
 disks, or a disk without the exact requested size. If a later add step fails,
 the CLI requests LUN deletion. Never delete or initialize a disk selected only

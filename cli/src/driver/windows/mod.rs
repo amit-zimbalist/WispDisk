@@ -3,6 +3,7 @@
 mod adapter;
 mod disk;
 mod inventory;
+mod mutation_lock;
 mod recovery;
 mod volume;
 mod win32;
@@ -25,6 +26,10 @@ pub(super) fn is_unresolved(error: &anyhow::Error) -> bool {
 }
 
 pub(super) fn execute(command: &Command) -> Result<()> {
+    let _mutation = match command {
+        Command::List { .. } => None,
+        _ => Some(mutation_lock::MutationLock::acquire()?),
+    };
     match command {
         Command::Add {
             letter,

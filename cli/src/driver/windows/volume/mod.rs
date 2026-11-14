@@ -27,7 +27,8 @@ use windows_sys::Win32::{
     System::{
         IO::DeviceIoControl,
         Ioctl::{
-            FSCTL_DISMOUNT_VOLUME, FSCTL_LOCK_VOLUME, FSCTL_UNLOCK_VOLUME, VOLUME_DISK_EXTENTS,
+            DISK_EXTENT, FSCTL_DISMOUNT_VOLUME, FSCTL_LOCK_VOLUME, FSCTL_UNLOCK_VOLUME,
+            VOLUME_DISK_EXTENTS,
         },
     },
 };
@@ -67,6 +68,10 @@ impl Volume {
     }
 
     pub(super) fn disk_number(handle: &OwnedHandle) -> Result<u32> {
+        Ok(Self::single_extent(handle)?.DiskNumber)
+    }
+
+    pub(in crate::driver::windows) fn single_extent(handle: &OwnedHandle) -> Result<DISK_EXTENT> {
         let mut storage = [0_u64; 128];
         let mut returned = 0;
         let result = unsafe {
@@ -100,7 +105,7 @@ impl Volume {
                 extents.NumberOfDiskExtents
             );
         }
-        Ok(extents.Extents[0].DiskNumber)
+        Ok(extents.Extents[0])
     }
 
     pub(super) fn lock(&mut self, force: bool) -> Result<()> {

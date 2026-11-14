@@ -34,6 +34,11 @@ private:
     friend class management::ManagementController;
     friend class LunIoLease;
 
+    struct StopLunResult {
+        NTSTATUS status;
+        PWISPDISK_LUN lun;
+    };
+
     void Initialize() const noexcept;
     _IRQL_requires_(PASSIVE_LEVEL)
     [[nodiscard]] NTSTATUS CreateDisk(
@@ -48,7 +53,7 @@ private:
         ULONG selected,
         support::StorPortPoolAllocation& allocation,
         ULONG& deviceId) const noexcept;
-    [[nodiscard]] NTSTATUS MarkLunStopping(ULONG deviceId, PWISPDISK_LUN& selected) const noexcept;
+    [[nodiscard]] StopLunResult StopLunForDeletion(ULONG deviceId) const noexcept;
     [[nodiscard]] PUCHAR DetachBackingStore(WISPDISK_LUN& lun, ULONG deviceId) const noexcept;
     _IRQL_requires_(PASSIVE_LEVEL)
     void DrainAndFreeBacking(WISPDISK_LUN& lun, ULONG deviceId) const noexcept;

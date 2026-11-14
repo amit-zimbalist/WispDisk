@@ -472,28 +472,31 @@ void ManagementController::MarkCreatesDeletedLocked(
 _Use_decl_annotations_
 NTSTATUS ManagementController::DeleteDisk(ULONG deviceId) const noexcept {
     const storage::LunStore disks{extension_};
-    PWISPDISK_LUN lun = nullptr;
-    const NTSTATUS status = disks.MarkLunStopping(deviceId, lun);
-    if (!NT_SUCCESS(status)) {
+    const auto stopped = disks.StopLunForDeletion(deviceId);
+    if (!NT_SUCCESS(stopped.status)) {
         WARN(
             "DeleteRejected",
             .AdapterInstance = extension_.AdapterInstance,
             .DeviceId = deviceId,
-            .Status = status);
-        return status;
+            .Status = stopped.status);
+        return stopped.status;
     }
-    disks.DrainAndFreeBacking(*lun, deviceId);
-    FinalizeDiskRemoval(*lun, deviceId);
+    DrainAndRemoveLun(*stopped.lun);
     INFO("DiskDeleted", .AdapterInstance = extension_.AdapterInstance, .DeviceId = deviceId);
     return STATUS_SUCCESS;
 }
 
-void ManagementController::FinalizeDiskRemoval(WISPDISK_LUN& lun, ULONG deviceId) const noexcept {
+_Use_decl_annotations_
+void ManagementController::DrainAndRemoveLun(WISPDISK_LUN& stoppingLun) const noexcept {
+    // The serialized management path retains this stopping LUN until removal.
+    const ULONG deviceId = stoppingLun.DeviceId;
+    const storage::LunStore disks{extension_};
+    disks.DrainAndFreeBacking(stoppingLun, deviceId);
+
     support::ScopedSpinLock lock{&extension_.LunLock};
-    // Removal becomes visible with the corresponding create record marked
-    // Deleted, only after the backing memory has actually been freed.
+    // Publish the empty slot and the deleted create record together.
     MarkCreatesDeletedLocked(deviceId, lock);
-    storage::LunStore{extension_}.FinalizeRemovalLocked(lun, lock);
+    disks.FinalizeRemovalLocked(stoppingLun, lock);
 }
 
 _Use_decl_annotations_
@@ -680,8 +683,7 @@ void ManagementController::DrainAndReleaseDisks() const noexcept {
     const storage::LunStore disks{extension_};
     disks.MarkAllLunsStopping();
     while (auto* lun = disks.FirstStoppingLun()) {
-        disks.DrainAndFreeBacking(*lun, lun->DeviceId);
-        FinalizeDiskRemoval(*lun, lun->DeviceId);
+        DrainAndRemoveLun(*lun);
     }
 }
 

@@ -109,7 +109,6 @@ private:
         const support::ScopedSpinLock& lock) const noexcept;
     void
     MarkCreatesDeletedLocked(ULONG deviceId, const support::ScopedSpinLock& lock) const noexcept;
-    void FinalizeDiskRemoval(WISPDISK_LUN& lun, ULONG deviceId) const noexcept;
     [[nodiscard]] bool SnapshotPendingOperation(
         const ControlRequest& control,
         const WISPDISK_OPERATION_REQUEST& identity,
@@ -124,6 +123,8 @@ private:
     void ProcessLegacyRequest(const ControlRequest& control) const noexcept;
     _IRQL_requires_(PASSIVE_LEVEL)
     [[nodiscard]] NTSTATUS DeleteDisk(ULONG deviceId) const noexcept;
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void DrainAndRemoveLun(WISPDISK_LUN& stoppingLun) const noexcept;
     _IRQL_requires_(PASSIVE_LEVEL)
     void DrainAndReleaseDisks() const noexcept;
 

@@ -130,17 +130,8 @@ pub(super) fn delete_allocation(
     let number = wait_for_physical_disk(location, DEVICE_WAIT)?;
     info!(disk_number = number, "Open target volumes");
     let mut deletion = DiskDeletion::open(number, location)?;
-    let prepared = (|| {
-        info!(disk_number = number, "Lock target volumes");
-        deletion.lock(force)?;
-        info!(disk_number = number, "Dismount target volumes");
-        deletion.dismount()?;
-        info!(disk_number = number, "Remove volume mount points");
-        deletion.remove_mounts()
-    })();
-    if let Err(error) = prepared {
-        info!(disk_number = number, "Restore volume mount points");
-        return match deletion.restore() {
+    if let Err(error) = deletion.prepare(force) {
+        return match deletion.restore_mounts() {
             Ok(()) => Err(error),
             Err(restore) => Err(recovery_failed(
                 error,
@@ -160,8 +151,7 @@ pub(super) fn delete_allocation(
                         .any(|entry| entry.disk.device_id == id && entry.state == 1)
             });
         if still_online {
-            info!(disk_number = number, "Restore volume mount points");
-            return match deletion.restore() {
+            return match deletion.restore_mounts() {
                 Ok(()) => Err(error.context("deletion rejected; original mount points restored")),
                 Err(restore) => Err(recovery_failed(
                     error,

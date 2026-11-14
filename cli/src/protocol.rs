@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use crate::args::MediaKind;
+
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const SRB_SIGNATURE: [u8; 8] = *b"WISPDK01";
 pub const MAXIMUM_DISK_COUNT: usize = 16;
@@ -32,6 +34,15 @@ pub enum Operation {
 pub enum ProtocolMediaKind {
     Fixed = 1,
     Removable = 2,
+}
+
+impl From<MediaKind> for ProtocolMediaKind {
+    fn from(media: MediaKind) -> Self {
+        match media {
+            MediaKind::Fixed => Self::Fixed,
+            MediaKind::Removable => Self::Removable,
+        }
+    }
 }
 
 #[repr(C)]

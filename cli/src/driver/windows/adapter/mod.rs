@@ -179,10 +179,7 @@ impl Adapter {
             operation: operation_request::<CreateProvisioning>(handle),
             size_bytes,
             logical_sector_size: LOGICAL_SECTOR_SIZE,
-            media_kind: match media {
-                MediaKind::Fixed => ProtocolMediaKind::Fixed as u32,
-                MediaKind::Removable => ProtocolMediaKind::Removable as u32,
-            },
+            media_kind: ProtocolMediaKind::from(media) as u32,
             requested_drive_letter: u16::from(letter.as_ascii()),
             reserved16: 0,
             reserved32: 0,

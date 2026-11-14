@@ -26,6 +26,9 @@ pub(super) fn is_unresolved(error: &anyhow::Error) -> bool {
 }
 
 pub(super) fn execute(command: &Command) -> Result<()> {
+    // Coordinate CLI-side work that the driver's per-disk guard cannot:
+    // installation, volume preparation, and recovery racing active setup.
+    // The driver independently protects provisioning from ordinary deletion.
     let _mutation = match command {
         Command::List { .. } => None,
         _ => Some(mutation_lock::MutationLock::acquire()?),

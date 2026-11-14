@@ -4,6 +4,7 @@ mod creation;
 mod deletion;
 mod interface_notification;
 mod provisioning;
+mod provisioning_guard;
 mod removal;
 
 pub(super) use self::{

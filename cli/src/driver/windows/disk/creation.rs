@@ -17,6 +17,7 @@ use super::super::{
 use super::{
     ScsiLocation,
     provisioning::{ProvisioningTarget, initialize_and_format},
+    provisioning_guard::ProvisioningGuard,
     verify_physical_disk_location, wait_for_physical_disk,
 };
 
@@ -45,7 +46,8 @@ pub(in crate::driver::windows) fn add_disk(
 
     adapter.require_recovery()?;
     adapter.require_provisioning_guard()?;
-    let created = adapter.create_disk(letter, media, size_bytes)?;
+    let guard = ProvisioningGuard::create(&adapter, letter, media, size_bytes)?;
+    let created = guard.created();
     info!(
         adapter_instance = created.adapter_instance,
         device_id = created.device_id,
@@ -54,21 +56,17 @@ pub(in crate::driver::windows) fn add_disk(
     );
 
     if let Err(error) =
-        initialize_created_disk(&adapter, &created, letter, media, size_bytes, file_system)
+        initialize_created_disk(&adapter, created, letter, media, size_bytes, file_system)
     {
-        return Err(error.context(format!(
-            "provisioning did not complete; device {} on adapter instance {} remains protected. After confirming Windows storage operations have stopped, use /recover-provisioning /adapter:{} /id:{}",
-            created.device_id, created.adapter_instance, created.adapter_instance, created.device_id
-        )));
+        return Err(guard.provisioning_failed(error));
     }
 
-    adapter.finish_provisioning(created.adapter_instance, created.device_id).map_err(|error| {
-        error.context(format!("could not confirm provisioning completion for device {} on adapter instance {}; inspect /list and use /recover-provisioning if it remains protected", created.device_id, created.adapter_instance))
-    })?;
+    let device_id = created.device_id;
+    guard.finish()?;
 
     println!(
         "created {} WispDisk {} ({size_bytes} bytes, {file_system}, device id {})",
-        media, letter, created.device_id
+        media, letter, device_id
     );
     Ok(())
 }

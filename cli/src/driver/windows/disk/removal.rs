@@ -69,24 +69,24 @@ pub(in crate::driver::windows) fn delete_by_identity(
     id: u32,
     force: bool,
 ) -> Result<()> {
-    let mut matched = None;
-    for adapter in adapters() {
-        adapter.require_recovery()?;
-        if adapter.state()?.adapter_instance == instance {
-            if matched.is_some() {
-                bail!("multiple adapters claim instance {instance}");
-            }
-            matched = Some(adapter);
-        }
-    }
-    let adapter =
-        matched.context("adapter instance is absent or stale; refresh /list before deletion")?;
+    let adapter = find_adapter_by_instance(instance)?;
+    adapter.require_recovery()?;
     delete_allocation(&adapter, instance, id, force)?;
     println!("deleted WispDisk device {id} (adapter instance {instance})");
     Ok(())
 }
 
 pub(in crate::driver::windows) fn recover_provisioning(instance: u64, id: u32) -> Result<()> {
+    let adapter = find_adapter_by_instance(instance)?;
+    adapter.require_provisioning_guard()?;
+    adapter.finish_provisioning(instance, id)?;
+    println!(
+        "released provisioning protection for device {id} (adapter instance {instance}); use /del to remove it if needed"
+    );
+    Ok(())
+}
+
+fn find_adapter_by_instance(instance: u64) -> Result<Adapter> {
     let mut matched = None;
     for adapter in adapters() {
         if adapter.state()?.adapter_instance == instance {
@@ -96,13 +96,7 @@ pub(in crate::driver::windows) fn recover_provisioning(instance: u64, id: u32) -
             matched = Some(adapter);
         }
     }
-    let adapter = matched.context("adapter instance is absent or stale; refresh /list")?;
-    adapter.require_provisioning_guard()?;
-    adapter.finish_provisioning(instance, id)?;
-    println!(
-        "released provisioning protection for device {id} (adapter instance {instance}); use /del to remove it if needed"
-    );
-    Ok(())
+    matched.context("adapter instance is absent or stale; refresh /list")
 }
 
 pub(super) fn delete_allocation(

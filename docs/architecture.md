@@ -193,10 +193,9 @@ its disk extent against that partition before formatting the returned volume
 object. Before formatting, revalidate the allocation and physical disk address.
 The WMI provisioning layer rejects an unexpected partition style, boot/system
 disks, or a disk without the exact requested size or serial. After success the
-CLI explicitly finishes the user-mode `ProvisioningGuard`, which releases the
-driver guard through a fallible request. Dropping the user-mode guard leaves
-the disk protected, because cleanup must not hide a failed release or endanger
-a WMI operation that may still be running after an uncertain response. An
+CLI explicitly asks the driver to release protection. If provisioning fails
+or the CLI exits early, the driver keeps the disk protected because a WMI
+operation could still be running. An
 operator can release a stranded guard using `/recover-provisioning` only after
 confirming that storage activity has stopped, then delete it if needed. Never
 delete or initialize a disk selected only by its current `PhysicalDriveN` number.

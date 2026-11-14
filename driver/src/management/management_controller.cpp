@@ -8,10 +8,14 @@ namespace wispdisk::management {
 
 using diagnostics::TracePhase;
 
-bool ManagementController::MutationCommand::IsReserved() const noexcept {
+static bool IsReservedMutation(ULONG operation) noexcept {
     return operation == WispDiskControlCreateReserved ||
            operation == WispDiskControlCreateProvisioning ||
            operation == WispDiskControlDeleteReserved;
+}
+
+bool ManagementController::MutationCommand::IsReserved() const noexcept {
+    return IsReservedMutation(operation);
 }
 
 ULONG ManagementController::MutationCommand::Mutation() const noexcept {
@@ -243,13 +247,14 @@ NTSTATUS ManagementController::BindOperationLocked(
     if (record->Mutation != command.Mutation()) {
         return STATUS_INVALID_PARAMETER;
     }
+    const bool protectProvisioning = command.operation == WispDiskControlCreateProvisioning;
     if (record->State != WispDiskOperationReserved) {
         if (command.Mutation() == WispDiskControlCreateDisk) {
             if (record->Create.SizeBytes != command.create.SizeBytes ||
                 record->Create.MediaKind != command.create.MediaKind ||
                 record->Create.RequestedDriveLetter != command.create.RequestedDriveLetter ||
                 record->Create.LogicalSectorSize != command.create.LogicalSectorSize ||
-                record->ProvisioningProtected != command.protectProvisioning) {
+                record->ProvisioningProtected != protectProvisioning) {
                 return STATUS_INVALID_PARAMETER;
             }
         } else if (record->Delete.DeviceId != command.remove.DeviceId) {
@@ -260,7 +265,7 @@ NTSTATUS ManagementController::BindOperationLocked(
     }
     record->Create = command.create;
     record->Delete = command.remove;
-    record->ProvisioningProtected = command.protectProvisioning;
+    record->ProvisioningProtected = protectProvisioning;
     if (command.Mutation() == WispDiskControlDeleteDisk) {
         record->DeviceId = command.remove.DeviceId;
     }
@@ -328,15 +333,12 @@ _Use_decl_annotations_
 WispDiskIoControlDisposition ManagementController::SubmitCreate(
     const ControlRequest& control,
     const WISPDISK_OPERATION_REQUEST& identity,
-    const WISPDISK_CREATE_REQUEST& request,
-    bool protectProvisioning) const noexcept {
+    const WISPDISK_CREATE_REQUEST& request) const noexcept {
     return Submit(
         control,
-        {.operation = protectProvisioning ? WispDiskControlCreateProvisioning
-                                          : WispDiskControlCreateReserved,
+        {.operation = static_cast<WISPDISK_CONTROL_CODE>(control.ioControl->ControlCode),
          .identity = identity,
-         .create = request,
-         .protectProvisioning = protectProvisioning});
+         .create = request});
 }
 
 _Use_decl_annotations_
@@ -586,10 +588,8 @@ void ManagementController::PublishOperationResult(
 _Use_decl_annotations_
 void ManagementController::ProcessWorkItem(PSCSI_REQUEST_BLOCK srb) const noexcept {
     const auto control = ControlRequest::FromSrb(srb);
+    const bool reserved = control && IsReservedMutation(control.ioControl->ControlCode);
     if (control) {
-        const bool reserved = control.ioControl->ControlCode == WispDiskControlCreateReserved ||
-                              control.ioControl->ControlCode == WispDiskControlCreateProvisioning ||
-                              control.ioControl->ControlCode == WispDiskControlDeleteReserved;
         WISPDISK_OPERATION_REQUEST identity{};
         if (reserved) {
             RtlCopyMemory(&identity, control.payload, sizeof(identity));
@@ -635,19 +635,12 @@ void ManagementController::ProcessWorkItem(PSCSI_REQUEST_BLOCK srb) const noexce
     // Copy all metadata before completion transfers SRB ownership to StorPort.
     bool busChanged = control &&
                       control.ioControl->ReturnCode == static_cast<ULONG>(STATUS_SUCCESS) &&
-                      (control.ioControl->ControlCode == WispDiskControlCreateDisk ||
-                       control.ioControl->ControlCode == WispDiskControlDeleteDisk ||
-                       control.ioControl->ControlCode == WispDiskControlCreateReserved ||
-                       control.ioControl->ControlCode == WispDiskControlCreateProvisioning ||
-                       control.ioControl->ControlCode == WispDiskControlDeleteReserved);
+                      (reserved || control.ioControl->ControlCode == WispDiskControlCreateDisk ||
+                       control.ioControl->ControlCode == WispDiskControlDeleteDisk);
     ULONGLONG operationId = 0;
     ULONG deviceId = 0;
     NTSTATUS resultStatus = STATUS_INVALID_DEVICE_REQUEST;
-    if (control &&
-        (control.ioControl->ControlCode == WispDiskControlCreateReserved ||
-         control.ioControl->ControlCode == WispDiskControlCreateProvisioning ||
-         control.ioControl->ControlCode == WispDiskControlDeleteReserved) &&
-        control.ioControl->Length == sizeof(WISPDISK_OPERATION_RESPONSE)) {
+    if (reserved && control.ioControl->Length == sizeof(WISPDISK_OPERATION_RESPONSE)) {
         WISPDISK_OPERATION_RESPONSE response{};
         RtlCopyMemory(&response, control.payload, sizeof(response));
         operationId = response.OperationId;

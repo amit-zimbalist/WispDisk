@@ -50,8 +50,7 @@ public:
     [[nodiscard]] WispDiskIoControlDisposition SubmitCreate(
         const ControlRequest& control,
         const WISPDISK_OPERATION_REQUEST& identity,
-        const WISPDISK_CREATE_REQUEST& request,
-        bool protectProvisioning) const noexcept;
+        const WISPDISK_CREATE_REQUEST& request) const noexcept;
     _IRQL_requires_max_(DISPATCH_LEVEL)
     [[nodiscard]] WispDiskIoControlDisposition SubmitDelete(
         const ControlRequest& control,
@@ -68,12 +67,11 @@ public:
 
 private:
     struct MutationCommand {
-        // The submission overloads select one of the four mutation operations.
+        // The submission overloads select the validated mutation operation.
         WISPDISK_CONTROL_CODE operation;
         WISPDISK_OPERATION_REQUEST identity;
         WISPDISK_CREATE_REQUEST create;
         WISPDISK_DELETE_REQUEST remove;
-        bool protectProvisioning;
 
         [[nodiscard]] bool IsReserved() const noexcept;
         [[nodiscard]] ULONG Mutation() const noexcept;

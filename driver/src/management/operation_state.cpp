@@ -104,10 +104,7 @@ WispDiskIoControlDisposition HandleReservedCreateControl(
         return WispDiskIoControlDisposition::Complete;
     }
     return driver::AdapterContext{*adapter}.Management().SubmitCreate(
-        control,
-        request.Operation,
-        validated,
-        control.ioControl->ControlCode == WispDiskControlCreateProvisioning);
+        control, request.Operation, validated);
 }
 
 void HandleFinishProvisioning(
@@ -116,9 +113,6 @@ void HandleFinishProvisioning(
     WISPDISK_REQUEST_HEADER header{};
     WISPDISK_FINISH_PROVISIONING_REQUEST request{};
     NTSTATUS status = control.ReadRequest(WispDiskControlFinishProvisioning, request, header);
-    if (NT_SUCCESS(status) && control.ioControl->Length < sizeof(WISPDISK_RESPONSE_HEADER)) {
-        status = STATUS_BUFFER_TOO_SMALL;
-    }
     if (NT_SUCCESS(status)) {
         status = request.Reserved == 0 && request.DeviceId != 0
                      ? driver::AdapterContext{*adapter}.Management().FinishProvisioning(
@@ -126,16 +120,16 @@ void HandleFinishProvisioning(
                            request.DeviceId)
                      : STATUS_INVALID_PARAMETER;
     }
+    if (!NT_SUCCESS(status)) {
+        control.WriteError(WispDiskControlFinishProvisioning, status, header.CorrelationId);
+        return;
+    }
     const auto response = MakeResponseHeader(
         sizeof(WISPDISK_RESPONSE_HEADER),
         WispDiskControlFinishProvisioning,
-        status,
+        STATUS_SUCCESS,
         header.CorrelationId);
-    if (control.ioControl->Length >= sizeof(response)) {
-        control.WriteResponse(response, status);
-    } else {
-        control.WriteError(WispDiskControlFinishProvisioning, status, header.CorrelationId);
-    }
+    control.WriteResponse(response, STATUS_SUCCESS);
 }
 
 WispDiskIoControlDisposition HandleReservedDeleteControl(

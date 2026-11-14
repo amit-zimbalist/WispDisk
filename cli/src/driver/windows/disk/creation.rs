@@ -1,11 +1,11 @@
 //! Create, initialize, and recover a new WispDisk allocation.
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use tracing::info;
 
 use crate::{
     args::{DriveLetter, FileSystem, MediaKind},
-    protocol::{CAP_CREATE_DELETE, CAP_READ_WRITE},
+    protocol::{CAP_CREATE_DELETE, CAP_PROVISIONING_GUARD, CAP_READ_WRITE},
 };
 
 use super::super::{
@@ -17,7 +17,6 @@ use super::super::{
 use super::{
     ScsiLocation,
     provisioning::{ProvisioningTarget, initialize_and_format},
-    provisioning_guard::ProvisioningGuard,
     verify_physical_disk_location, wait_for_physical_disk,
 };
 
@@ -44,25 +43,32 @@ pub(in crate::driver::windows) fn add_disk(
         bail!("loaded driver does not support removable-media disks");
     }
 
-    adapter.require_recovery()?;
-    adapter.require_provisioning_guard()?;
-    let guard = ProvisioningGuard::create(&adapter, letter, media, size_bytes)?;
-    let created = guard.created();
+    if version.capabilities & CAP_PROVISIONING_GUARD == 0 {
+        bail!(
+            "loaded WispDisk driver lacks provisioning protection; upgrade the driver before creating disks"
+        );
+    }
+    let created = adapter.create_disk(letter, media, size_bytes)?;
+    let instance = created.adapter_instance;
+    let device_id = created.device_id;
     info!(
-        adapter_instance = created.adapter_instance,
-        device_id = created.device_id,
-        size_bytes,
-        "Disk allocation created"
+        adapter_instance = instance,
+        device_id, size_bytes, "Disk allocation created"
     );
 
-    if let Err(error) =
-        initialize_created_disk(&adapter, created, letter, media, size_bytes, file_system)
-    {
-        return Err(guard.provisioning_failed(error));
-    }
-
-    let device_id = created.device_id;
-    guard.finish()?;
+    // The driver keeps the allocation protected if setup fails or the CLI exits
+    // while Windows may still be provisioning it.
+    initialize_created_disk(&adapter, &created, letter, media, size_bytes, file_system)
+        .with_context(|| {
+            format!(
+                "provisioning did not complete; device {device_id} on adapter instance {instance} remains protected. After confirming Windows storage operations have stopped, use /recover-provisioning /adapter:{instance} /id:{device_id}"
+            )
+        })?;
+    adapter.finish_provisioning(instance, device_id).with_context(|| {
+        format!(
+            "could not confirm provisioning completion for device {device_id} on adapter instance {instance}; inspect /list and use /recover-provisioning if it remains protected"
+        )
+    })?;
 
     println!(
         "created {} WispDisk {} ({size_bytes} bytes, {file_system}, device id {})",

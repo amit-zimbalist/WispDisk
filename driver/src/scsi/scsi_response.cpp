@@ -42,6 +42,14 @@ void WriteDeviceIdHex(_Out_writes_(8) UCHAR* destination, _In_ ULONG deviceId) n
     }
 }
 
+void WriteAdapterIdHex(_Out_writes_(16) UCHAR* destination, _In_ ULONGLONG adapterId) noexcept {
+    static constexpr UCHAR digits[] = "0123456789ABCDEF";
+    for (ULONG index = 0; index < 16; ++index) {
+        const ULONG shift = (15 - index) * 4;
+        destination[index] = digits[(adapterId >> shift) & 0x0fU];
+    }
+}
+
 UCHAR SetSense(
     _Inout_ PSCSI_REQUEST_BLOCK srb,
     _In_ UCHAR senseKey,

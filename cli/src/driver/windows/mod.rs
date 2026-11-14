@@ -39,6 +39,7 @@ pub(super) fn execute(command: &Command) -> Result<()> {
         } => add_disk(*letter, *media, *size_bytes, *file_system),
         Command::Delete { letter, force } => delete_disk(*letter, *force),
         Command::DeleteId { adapter, id, force } => delete_by_identity(*adapter, *id, *force),
+        Command::RecoverProvisioning { adapter, id } => disk::recover_provisioning(*adapter, *id),
         Command::List { json } => list_inventory(*json),
     }
 }

@@ -53,7 +53,9 @@ void LunStore::SnapshotStateLocked(
         response.Disks[response.DiskCount++] = {
             .Disk = DiskInfo(lun),
             .CreateOperationId = lun.CreateOperationId,
-            .State = static_cast<ULONG>(lun.State),
+            .State = lun.State == WispDiskLunState::Online && lun.ProvisioningProtected
+                         ? WISPDISK_DISK_STATE_PROVISIONING
+                         : static_cast<ULONG>(lun.State),
         };
     }
 }
@@ -98,6 +100,7 @@ NTSTATUS LunStore::SelectAvailableLun(ULONGLONG sizeBytes, ULONG& selected) cons
 
 NTSTATUS LunStore::CommitNewLun(
     const WISPDISK_CREATE_REQUEST& request,
+    bool protectProvisioning,
     ULONG selected,
     support::StorPortPoolAllocation& allocation,
     ULONG& deviceId) const noexcept {
@@ -116,6 +119,7 @@ NTSTATUS LunStore::CommitNewLun(
     lun.RequestedDriveLetter = request.RequestedDriveLetter;
     lun.SizeBytes = request.SizeBytes;
     lun.CreateOperationId = 0;
+    lun.ProvisioningProtected = protectProvisioning;
     lun.BackingStore = static_cast<PUCHAR>(allocation.release());
     lun.ActiveRequests = 0;
     KeSetEvent(&lun.NoActiveRequestsEvent, IO_NO_INCREMENT, FALSE);
@@ -125,8 +129,11 @@ NTSTATUS LunStore::CommitNewLun(
 }
 
 _Use_decl_annotations_
-NTSTATUS LunStore::CreateDisk(const WISPDISK_CREATE_REQUEST& request, ULONG& deviceId, UCHAR& lun)
-    const noexcept {
+NTSTATUS LunStore::CreateDisk(
+    const WISPDISK_CREATE_REQUEST& request,
+    bool protectProvisioning,
+    ULONG& deviceId,
+    UCHAR& lun) const noexcept {
     ULONG selected = kMaximumDiskCount;
     NTSTATUS status = SelectAvailableLun(request.SizeBytes, selected);
     if (!NT_SUCCESS(status)) {
@@ -146,7 +153,7 @@ NTSTATUS LunStore::CreateDisk(const WISPDISK_CREATE_REQUEST& request, ULONG& dev
         return STATUS_INSUFFICIENT_RESOURCES;
     }
     RtlZeroMemory(allocation.get(), static_cast<SIZE_T>(request.SizeBytes));
-    status = CommitNewLun(request, selected, allocation, deviceId);
+    status = CommitNewLun(request, protectProvisioning, selected, allocation, deviceId);
     if (!NT_SUCCESS(status)) {
         WARN("CreateCommitFailed", .AdapterInstance = extension_.AdapterInstance, .Status = status);
         return status;
@@ -160,15 +167,20 @@ NTSTATUS LunStore::CreateDisk(const WISPDISK_CREATE_REQUEST& request, ULONG& dev
     return STATUS_SUCCESS;
 }
 
-PWISPDISK_LUN LunStore::MarkLunStopping(ULONG deviceId) const noexcept {
+NTSTATUS LunStore::MarkLunStopping(ULONG deviceId, PWISPDISK_LUN& selected) const noexcept {
+    selected = nullptr;
     support::ScopedSpinLock lock{&extension_.LunLock};
     for (auto& lun : extension_.Luns) {
         if (lun.State == WispDiskLunState::Online && lun.DeviceId == deviceId) {
+            if (lun.ProvisioningProtected) {
+                return STATUS_DEVICE_BUSY;
+            }
             lun.State = WispDiskLunState::Stopping;
-            return &lun;
+            selected = &lun;
+            return STATUS_SUCCESS;
         }
     }
-    return nullptr;
+    return STATUS_NO_SUCH_DEVICE;
 }
 
 PUCHAR LunStore::DetachBackingStore(WISPDISK_LUN& lun, ULONG deviceId) const noexcept {
@@ -193,6 +205,7 @@ void LunStore::FinalizeRemovalLocked(WISPDISK_LUN& lun, const support::ScopedSpi
     lun.MediaKind = 0;
     lun.RequestedDriveLetter = 0;
     lun.CreateOperationId = 0;
+    lun.ProvisioningProtected = false;
     lun.State = WispDiskLunState::Empty;
 }
 
@@ -252,7 +265,8 @@ PWISPDISK_LUN LunStore::AcquireLunIo(const SCSI_REQUEST_BLOCK& srb, LunView& vie
         .backingStore = lun.BackingStore,
         .sizeBytes = lun.SizeBytes,
         .mediaKind = lun.MediaKind,
-        .deviceId = lun.DeviceId};
+        .deviceId = lun.DeviceId,
+        .adapterInstance = extension_.AdapterInstance};
     return &lun;
 }
 

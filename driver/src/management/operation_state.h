@@ -4,6 +4,10 @@
 #include "control_request.h"
 
 namespace wispdisk::management {
+
+void HandleFinishProvisioning(
+    PWISPDISK_ADAPTER_EXTENSION adapter,
+    const ControlRequest& control) noexcept;
 void HandleReserveOperation(
     PWISPDISK_ADAPTER_EXTENSION adapter,
     const ControlRequest& control) noexcept;

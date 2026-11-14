@@ -5,6 +5,7 @@ use tracing::info;
 use windows_sys::Win32::Foundation::GENERIC_READ;
 
 use crate::args::DriveLetter;
+use crate::protocol::DISK_STATE_PROVISIONING;
 
 use super::super::{
     DEVICE_WAIT,
@@ -85,6 +86,25 @@ pub(in crate::driver::windows) fn delete_by_identity(
     Ok(())
 }
 
+pub(in crate::driver::windows) fn recover_provisioning(instance: u64, id: u32) -> Result<()> {
+    let mut matched = None;
+    for adapter in adapters() {
+        if adapter.state()?.adapter_instance == instance {
+            if matched.is_some() {
+                bail!("multiple adapters claim instance {instance}");
+            }
+            matched = Some(adapter);
+        }
+    }
+    let adapter = matched.context("adapter instance is absent or stale; refresh /list")?;
+    adapter.require_provisioning_guard()?;
+    adapter.finish_provisioning(instance, id)?;
+    println!(
+        "released provisioning protection for device {id} (adapter instance {instance}); use /del to remove it if needed"
+    );
+    Ok(())
+}
+
 pub(super) fn delete_allocation(
     adapter: &Adapter,
     instance: u64,
@@ -104,6 +124,11 @@ pub(super) fn delete_allocation(
         .iter()
         .find(|entry| entry.disk.device_id == id)
         .context("device ID is absent; refresh /list")?;
+    if entry.state == DISK_STATE_PROVISIONING {
+        bail!(
+            "device {id} is protected during provisioning; inspect /list and use /recover-provisioning only after Windows storage operations have stopped"
+        );
+    }
     if entry.state != 1 {
         bail!("device {id} is already stopping; query inventory until removal completes");
     }

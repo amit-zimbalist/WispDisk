@@ -36,15 +36,19 @@ private:
 
     void Initialize() const noexcept;
     _IRQL_requires_(PASSIVE_LEVEL)
-    [[nodiscard]] NTSTATUS
-    CreateDisk(const WISPDISK_CREATE_REQUEST& request, ULONG& deviceId, UCHAR& lun) const noexcept;
+    [[nodiscard]] NTSTATUS CreateDisk(
+        const WISPDISK_CREATE_REQUEST& request,
+        bool protectProvisioning,
+        ULONG& deviceId,
+        UCHAR& lun) const noexcept;
     [[nodiscard]] NTSTATUS SelectAvailableLun(ULONGLONG sizeBytes, ULONG& selected) const noexcept;
     [[nodiscard]] NTSTATUS CommitNewLun(
         const WISPDISK_CREATE_REQUEST& request,
+        bool protectProvisioning,
         ULONG selected,
         support::StorPortPoolAllocation& allocation,
         ULONG& deviceId) const noexcept;
-    [[nodiscard]] PWISPDISK_LUN MarkLunStopping(ULONG deviceId) const noexcept;
+    [[nodiscard]] NTSTATUS MarkLunStopping(ULONG deviceId, PWISPDISK_LUN& selected) const noexcept;
     [[nodiscard]] PUCHAR DetachBackingStore(WISPDISK_LUN& lun, ULONG deviceId) const noexcept;
     _IRQL_requires_(PASSIVE_LEVEL)
     void DrainAndFreeBacking(WISPDISK_LUN& lun, ULONG deviceId) const noexcept;

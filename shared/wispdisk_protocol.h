@@ -11,6 +11,8 @@
 #define WISPDISK_CAP_READ_WRITE 0x00000002UL
 #define WISPDISK_CAP_REMOVABLE 0x00000004UL
 #define WISPDISK_CAP_OPERATION_RECOVERY 0x00000008UL
+#define WISPDISK_CAP_PROVISIONING_GUARD 0x00000010UL
+#define WISPDISK_DISK_STATE_PROVISIONING 3UL
 
 typedef enum _WISPDISK_CONTROL_CODE {
     WispDiskControlQueryVersion = 0x800,
@@ -22,6 +24,8 @@ typedef enum _WISPDISK_CONTROL_CODE {
     WispDiskControlCreateReserved = 0x806,
     WispDiskControlDeleteReserved = 0x807,
     WispDiskControlListState = 0x808,
+    WispDiskControlCreateProvisioning = 0x809,
+    WispDiskControlFinishProvisioning = 0x80a,
 } WISPDISK_CONTROL_CODE;
 
 typedef enum _WISPDISK_MEDIA_KIND {
@@ -135,6 +139,13 @@ typedef struct _WISPDISK_RESERVED_DELETE_REQUEST {
     ULONG Reserved;
 } WISPDISK_RESERVED_DELETE_REQUEST;
 
+typedef struct _WISPDISK_FINISH_PROVISIONING_REQUEST {
+    WISPDISK_REQUEST_HEADER Header;
+    ULONGLONG AdapterInstance;
+    ULONG DeviceId;
+    ULONG Reserved;
+} WISPDISK_FINISH_PROVISIONING_REQUEST;
+
 typedef struct _WISPDISK_OPERATION_RESPONSE {
     WISPDISK_RESPONSE_HEADER Header;
     ULONGLONG AdapterInstance;
@@ -153,7 +164,7 @@ typedef struct _WISPDISK_OPERATION_RESPONSE {
 typedef struct _WISPDISK_DISK_STATE {
     WISPDISK_DISK_INFO Disk;
     ULONGLONG CreateOperationId;
-    ULONG State; // 1=online, 2=stopping (still owns backing memory)
+    ULONG State; // 1=online, 2=stopping, 3=online and provisioning protected
     ULONG Reserved;
 } WISPDISK_DISK_STATE;
 
@@ -179,6 +190,7 @@ static_assert(sizeof(WISPDISK_RESERVE_REQUEST) == 32, "protocol ABI changed");
 static_assert(sizeof(WISPDISK_OPERATION_REQUEST) == 40, "protocol ABI changed");
 static_assert(sizeof(WISPDISK_RESERVED_CREATE_REQUEST) == 64, "protocol ABI changed");
 static_assert(sizeof(WISPDISK_RESERVED_DELETE_REQUEST) == 48, "protocol ABI changed");
+static_assert(sizeof(WISPDISK_FINISH_PROVISIONING_REQUEST) == 40, "protocol ABI changed");
 static_assert(sizeof(WISPDISK_OPERATION_RESPONSE) == 64, "protocol ABI changed");
 static_assert(sizeof(WISPDISK_DISK_STATE) == 48, "protocol ABI changed");
 static_assert(sizeof(WISPDISK_STATE_RESPONSE) == 816, "protocol ABI changed");

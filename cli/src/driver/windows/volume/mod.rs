@@ -277,13 +277,6 @@ impl fmt::Display for VolumeLockFailure {
         f.write_str("lock target volume")
     }
 }
-pub(super) fn is_lock_refusal(error: &anyhow::Error) -> bool {
-    error.downcast_ref::<VolumeLockFailure>().is_some()
-        && error
-            .downcast_ref::<io::Error>()
-            .is_some_and(|error| error.raw_os_error() == Some(5))
-}
-
 pub(super) fn ensure_drive_letter_available(letter: DriveLetter) -> Result<()> {
     ensure!(
         !drive_letter_in_use(letter),
@@ -376,17 +369,5 @@ mod tests {
         let error = volume.restore_mounts().unwrap_err();
         assert!(format!("{error:#}").contains("unlock also failed"));
         assert!(volume.locked);
-    }
-
-    #[test]
-    fn only_access_denied_during_locking_is_a_retryable_lock_refusal() {
-        let lock = anyhow::Error::new(io::Error::from_raw_os_error(5)).context(VolumeLockFailure);
-        assert!(is_lock_refusal(&lock));
-        let opening =
-            anyhow::Error::new(io::Error::from_raw_os_error(5)).context("open target volume");
-        assert!(!is_lock_refusal(&opening));
-        let transport =
-            anyhow::Error::new(io::Error::from_raw_os_error(1117)).context(VolumeLockFailure);
-        assert!(!is_lock_refusal(&transport));
     }
 }

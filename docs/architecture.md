@@ -99,13 +99,15 @@ identity matching stays in recovery, and failed create conversion retains the
 original unresolved-operation handle.
 
 CLI add and delete commands hold a machine-wide named mutex from before
-adapter discovery until provisioning, deletion, or rollback finishes. This
+adapter discovery until provisioning or deletion finishes. This
 serializes mutations from cooperating CLI processes, including across sessions;
-an abandoned mutex is released by Windows when its owner exits. Before storage
-mutations, provisioning checks that the original adapter instance and device ID
-are still online at the expected SCSI address. The mutex does not coordinate
-older clients, direct miniport protocol callers, or external device removal;
-those can still race a check and a subsequent Windows storage operation.
+an abandoned mutex is released by Windows when its owner exits. The driver also
+publishes each new CLI allocation with a provisioning guard under LunLock; all
+ordinary deletion requests reject a protected LUN, including legacy and direct
+protocol requests. SCSI serial and device identifiers include adapter instance
+and device ID. The CLI checks the WMI disk serial against that identity and
+resolves the volume through its partition. External adapter removal and other
+Windows storage changes are outside the driver's guard.
 
 ### Miniport adapter context
 
@@ -173,8 +175,8 @@ shared names in `management/diagnostics.h`; their numeric wire values stay fixed
    `.sys` through the Service Control Manager is not sufficient packaging.
 6. Discover the installed `\\.\ScsiN:` adapter by protocol signature and issue
    the protocol version/capability query before any mutation.
-7. Send a create request. The driver validates all fields, allocates a unique
-   device ID, publishes a LUN, and notifies StorPort of the state change.
+7. Send a guarded create request. The driver validates all fields, allocates a
+   unique device ID, publishes a protected LUN, and notifies StorPort.
 8. Register for `GUID_DEVINTERFACE_DISK` arrival, enumerate the present disk
    interfaces, and match the returned path/target/LUN plus the adapter's SCSI
    port through `IOCTL_SCSI_GET_ADDRESS`. Resolve the matching interface to its
@@ -182,7 +184,7 @@ shared names in `management/diagnostics.h`; their numeric wire values stay fixed
    order or a `PhysicalDriveN` number on its own.
 9. Initialize the disk, create one filesystem-appropriate MBR partition with
    the requested drive letter, format it as FAT, FAT32, or NTFS, and verify the
-   mount. These are separate operations with shared rollback. Consume the
+   mount. Consume the
    partition object returned by the create operation instead of waiting for a
    second provider-cache query.
 
@@ -190,9 +192,12 @@ Resolve the volume through the created partition's WMI association, and check
 its disk extent against that partition before formatting the returned volume
 object. Before formatting, revalidate the allocation and physical disk address.
 The WMI provisioning layer rejects an unexpected partition style, boot/system
-disks, or a disk without the exact requested size. If a later add step fails,
-the CLI requests LUN deletion. Never delete or initialize a disk selected only
-by its current `PhysicalDriveN` number.
+disks, or a disk without the exact requested size or serial. After success the
+CLI explicitly releases the guard. On failure it leaves the disk protected,
+because a WMI operation may still be running after an uncertain response. An
+operator can release a stranded guard using `/recover-provisioning` only after
+confirming that storage activity has stopped, then delete it if needed. Never
+delete or initialize a disk selected only by its current `PhysicalDriveN` number.
 
 ## Delete flow
 
@@ -275,6 +280,14 @@ QueryOperation returns Reserved, Pending, Succeeded, Failed, or Deleted. Deleted
 means a successful create's allocation has since been removed and cannot be
 resurrected by replay.
 
+The provisioning-guard capability adds a guarded reserved-create operation
+and an idempotent finish operation keyed by adapter instance and device ID.
+The guarded create's choice is part of its immutable replay parameters. Its
+LUN is protected before it becomes online, and normal deletion returns busy
+until explicit finish. Inventory reports protected disks as `provisioning`.
+Guards do not time out, and are lost only with adapter teardown or explicit
+finish. An uncertain storage operation must not trigger an automatic finish.
+
 The fixed 128-record table never evicts pending mutations or successful creates
 with live allocations. Empty slots are used first, then the oldest unused
 reservation or terminal record is reclaimed. An unknown/expired handle is
@@ -299,13 +312,13 @@ closes admission under that lock and waits until the worker can be freed.
 The CLI queries the original reserved handle after a transport failure. Reserved
 can be submitted again, Pending is polled, Succeeded returns the original disk,
 and Failed is a confirmed rejection. Unknown outcomes retain recovery identity
-and never cause another create. Initialization rollback uses the ordinary safe
-deletion path, including volume locks, driver reconciliation, and PnP checks.
+and never cause another create. Failed provisioning retains its guard until an
+explicit recovery request; subsequent deletion uses the ordinary safe path.
 
 Deletion by adapter instance/device ID enumerates volume GUIDs and mount points,
 matches them by physical disk and verified SCSI location, and attempts to lock
 every target volume before dismount/removal. `/force` bypasses only lock failures
-and is never used by creation rollback. After rejection it restores mounts only when
+and is never implicit during provisioning recovery. After rejection it restores mounts only when
 inventory confirms that the same allocation remains online. An unresolved
 deletion is reported for subsequent inventory-based recovery. Mount restoration
 unlocks only volumes whose locks were acquired; it cannot recover application

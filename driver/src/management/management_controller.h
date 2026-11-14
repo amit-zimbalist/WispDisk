@@ -37,6 +37,8 @@ public:
     QueryOperation(ULONGLONG instance, ULONGLONG operation, OperationResult& result) const noexcept;
     _IRQL_requires_max_(DISPATCH_LEVEL)
     void SnapshotState(WISPDISK_STATE_RESPONSE& response) const noexcept;
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    [[nodiscard]] NTSTATUS FinishProvisioning(ULONGLONG instance, ULONG deviceId) const noexcept;
 
     // Requests have been validated by the protocol layer. A successful queue
     // transfers SRB ownership to the worker; Complete means a response is ready.
@@ -48,7 +50,8 @@ public:
     [[nodiscard]] WispDiskIoControlDisposition SubmitCreate(
         const ControlRequest& control,
         const WISPDISK_OPERATION_REQUEST& identity,
-        const WISPDISK_CREATE_REQUEST& request) const noexcept;
+        const WISPDISK_CREATE_REQUEST& request,
+        bool protectProvisioning) const noexcept;
     _IRQL_requires_max_(DISPATCH_LEVEL)
     [[nodiscard]] WispDiskIoControlDisposition SubmitDelete(
         const ControlRequest& control,
@@ -70,6 +73,7 @@ private:
         WISPDISK_OPERATION_REQUEST identity;
         WISPDISK_CREATE_REQUEST create;
         WISPDISK_DELETE_REQUEST remove;
+        bool protectProvisioning;
 
         [[nodiscard]] bool IsReserved() const noexcept;
         [[nodiscard]] ULONG Mutation() const noexcept;

@@ -10,7 +10,7 @@ use wmi::WMIConnection;
 
 use crate::{
     args::{DriveLetter, FileSystem, MediaKind},
-    protocol::StateResponse,
+    protocol::{DISK_STATE_PROVISIONING, StateResponse},
 };
 
 use super::super::{
@@ -47,6 +47,11 @@ pub(super) fn initialize_and_format(
 
     info!(disk_number, "Query new disk");
     let disk = storage.get_disk(disk_number)?;
+
+    ensure!(
+        matches_allocation_serial(disk.serial_number.as_deref(), target.created),
+        "WMI disk identity does not match the created allocation; refusing to provision it"
+    );
 
     if disk.is_system || disk.is_boot {
         bail!("refusing to initialize a boot or system disk");
@@ -148,12 +153,20 @@ fn matches_created_allocation(state: &StateResponse, created: &CreatedDisk) -> b
         && state.disks[..state.disk_count as usize]
             .iter()
             .any(|entry| {
-                entry.state == 1
+                entry.state == DISK_STATE_PROVISIONING
                     && entry.disk.device_id == created.device_id
                     && entry.disk.path_id == created.path_id
                     && entry.disk.target_id == created.target_id
                     && entry.disk.lun == created.lun
             })
+}
+
+fn matches_allocation_serial(serial: Option<&str>, created: &CreatedDisk) -> bool {
+    let expected = format!(
+        "WISPDK{:016X}{:08X}",
+        created.adapter_instance, created.device_id
+    );
+    serial.is_some_and(|serial| serial.trim().eq_ignore_ascii_case(&expected))
 }
 
 #[allow(non_camel_case_types)]
@@ -165,6 +178,8 @@ struct MSFT_Disk {
     number: u32,
     #[serde(rename = "Size")]
     size: u64,
+    #[serde(rename = "SerialNumber")]
+    serial_number: Option<String>,
     #[serde(rename = "PartitionStyle")]
     partition_style: u16,
     #[serde(rename = "IsBoot")]
@@ -310,7 +325,7 @@ impl StorageWmi {
 
     fn get_disk(&self, disk_number: u32) -> Result<MSFT_Disk> {
         let query = format!(
-            "SELECT __Path, Number, Size, PartitionStyle, IsBoot, IsSystem, IsOffline, IsReadOnly \
+            "SELECT __Path, Number, Size, SerialNumber, PartitionStyle, IsBoot, IsSystem, IsOffline, IsReadOnly \
              FROM MSFT_Disk WHERE Number = {disk_number}"
         );
         let mut disks: Vec<MSFT_Disk> = self
@@ -624,7 +639,7 @@ mod tests {
                 lun: 2,
                 ..Default::default()
             },
-            state: 1,
+            state: DISK_STATE_PROVISIONING,
             ..Default::default()
         };
         assert!(matches_created_allocation(&state, &created));
@@ -636,6 +651,30 @@ mod tests {
         state.adapter_instance = 100;
         state.disks[0].state = 2;
         assert!(!matches_created_allocation(&state, &created));
+    }
+
+    #[test]
+    fn disk_serial_identifies_the_adapter_instance_and_device() {
+        let created = CreatedDisk {
+            adapter_instance: 0x1234,
+            device_id: 0xabcd,
+            path_id: 0,
+            target_id: 0,
+            lun: 0,
+        };
+        assert!(matches_allocation_serial(
+            Some("WISPDK00000000000012340000ABCD"),
+            &created
+        ));
+        assert!(!matches_allocation_serial(
+            Some("WISPDK00000000000012350000ABCD"),
+            &created
+        ));
+        assert!(!matches_allocation_serial(
+            Some("WISPDK00000000000012340000ABCE"),
+            &created
+        ));
+        assert!(!matches_allocation_serial(None, &created));
     }
 
     #[test]

@@ -8,7 +8,7 @@ mod removal;
 
 pub(super) use self::{
     creation::add_disk,
-    removal::{delete_by_identity, delete_disk},
+    removal::{delete_by_identity, delete_disk, recover_provisioning},
 };
 
 use self::interface_notification::DiskInterfaceNotification;

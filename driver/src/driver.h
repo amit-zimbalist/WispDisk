@@ -36,6 +36,7 @@ struct WISPDISK_LUN {
     USHORT Reserved16;
     ULONGLONG SizeBytes;
     ULONGLONG CreateOperationId;
+    bool ProvisioningProtected;
     PUCHAR BackingStore;
     ULONG ActiveRequests;
     KEVENT NoActiveRequestsEvent;
@@ -52,6 +53,7 @@ struct WISPDISK_OPERATION_RECORD {
     UCHAR Lun;
     WISPDISK_CREATE_REQUEST Create;
     WISPDISK_DELETE_REQUEST Delete;
+    bool ProvisioningProtected;
 };
 
 struct WISPDISK_ADAPTER_EXTENSION {

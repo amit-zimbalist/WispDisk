@@ -167,20 +167,18 @@ NTSTATUS LunStore::CreateDisk(
     return STATUS_SUCCESS;
 }
 
-NTSTATUS LunStore::MarkLunStopping(ULONG deviceId, PWISPDISK_LUN& selected) const noexcept {
-    selected = nullptr;
+LunStore::StopLunResult LunStore::StopLunForDeletion(ULONG deviceId) const noexcept {
     support::ScopedSpinLock lock{&extension_.LunLock};
     for (auto& lun : extension_.Luns) {
         if (lun.State == WispDiskLunState::Online && lun.DeviceId == deviceId) {
             if (lun.ProvisioningProtected) {
-                return STATUS_DEVICE_BUSY;
+                return {.status = STATUS_DEVICE_BUSY, .lun = nullptr};
             }
             lun.State = WispDiskLunState::Stopping;
-            selected = &lun;
-            return STATUS_SUCCESS;
+            return {.status = STATUS_SUCCESS, .lun = &lun};
         }
     }
-    return STATUS_NO_SUCH_DEVICE;
+    return {.status = STATUS_NO_SUCH_DEVICE, .lun = nullptr};
 }
 
 PUCHAR LunStore::DetachBackingStore(WISPDISK_LUN& lun, ULONG deviceId) const noexcept {
@@ -196,10 +194,12 @@ PUCHAR LunStore::DetachBackingStore(WISPDISK_LUN& lun, ULONG deviceId) const noe
 void LunStore::FinalizeRemovalLocked(WISPDISK_LUN& lun, const support::ScopedSpinLock& lock)
     const noexcept {
     lock.AssertProtects(&extension_.LunLock);
+    NT_ASSERT(lun.State == WispDiskLunState::Stopping);
+    NT_ASSERT(lun.ActiveRequests == 0);
+    NT_ASSERT(lun.BackingStore == nullptr);
     extension_.TotalAllocatedBytes = extension_.TotalAllocatedBytes >= lun.SizeBytes
                                          ? extension_.TotalAllocatedBytes - lun.SizeBytes
                                          : 0;
-    lun.BackingStore = nullptr;
     lun.SizeBytes = 0;
     lun.DeviceId = 0;
     lun.MediaKind = 0;
